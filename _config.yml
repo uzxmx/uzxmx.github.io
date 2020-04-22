@@ -1,40 +1,14 @@
-title: Mingxiang Xue's blog
-email: MingxiangXue@gmail.com
+title: Mingxiang's blog
+email: mingxiangxue@gmail.com
 description: >-
-  A personal blog for Mingxiang Xue.
-baseurl: ""
+  A blog that contains articles about programming languages, open source
+  frameworks, and some technical how-to and tricks.
 url: "https://uzxmx.github.io"
-github_username:  UzxMx
+github_username: uzxmx
 
-locale: "en"
-markdown: kramdown
-remote_theme: mmistakes/minimal-mistakes@4.13.0
+remote_theme: "mmistakes/minimal-mistakes@4.19.1"
 plugins:
-  - jekyll-feed
-
-author:
-  name: "Mingxiang Xue"
-  avatar: /assets/images/avatar.jpg
-  bio: "Yet another technical blog"
-  location: "Chengdu, CN"
-  links:
-    - label: "GitHub"
-      icon: "fab fa-fw fa-github"
-      url: "https://github.com/UzxMx"
-
-search: true
-
-category_archive:
-  type: liquid
-  path: /categories/
-tag_archive:
-  type: liquid
-  path: /tags/
-
-permalink: /:categories/:title/
-
-paginate: 5
-paginate_path: /page:num/
+  - jekyll-include-cache
 
 defaults:
   - scope:
@@ -42,25 +16,6 @@ defaults:
       type: posts
     values:
       layout: single
-      author_profile: true
-      toc_label: "On this page"
+      toc: true
+      toc_sticky: true
       read_time: true
-      comments: true
-      related: true
-      sidebar:
-        nav: "links"
-  - scope:
-      path: ""
-      type: pages
-    values:
-      layout: single
-      author_profile: true
-      toc_label: "On this page"
-      sidebar:
-        nav: "links"
-
-footer:
-  links:
-    - label: "GitHub"
-      icon: "fab fa-fw fa-github"
-      url: "https://github.com/UzxMx"

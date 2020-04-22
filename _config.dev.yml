@@ -1,2 +1,1 @@
-remote_theme_cache_enabled: true
-# remote_theme_cache_dir: ~/tmp
+theme: minimal-mistakes-jekyll
