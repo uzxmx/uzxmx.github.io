@@ -5,6 +5,7 @@ description: >-
   frameworks, and some technical how-to and tricks.
 url: "https://uzxmx.github.io"
 github_username: uzxmx
+permalink: /:title:output_ext
 
 remote_theme: "mmistakes/minimal-mistakes@4.19.1"
 plugins:
