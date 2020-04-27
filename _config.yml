@@ -11,9 +11,7 @@ plugins:
   - jekyll-include-cache
 
 comments:
-  provider: "disqus"
-  disqus:
-    shortname: "uzxmx"
+  provider: "custom"
 
 defaults:
   - scope:

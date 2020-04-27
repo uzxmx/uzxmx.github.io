@@ -1,0 +1,17 @@
+{% if jekyll.environment == 'production' and site.comments.provider and page.comments %}
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/gitalk@1/dist/gitalk.css" />
+  <script src="https://cdn.jsdelivr.net/npm/gitalk@1/dist/gitalk.min.js"></script>
+  <script>
+    var gitalk = new Gitalk({
+      clientID: 'b520e04f320af9c44fa8',
+      clientSecret: '9c2486428baddfcf9703cdf1f7e6b42fc8f3e0b9',
+      repo: 'uzxmx.github.io',
+      owner: 'uzxmx',
+      admin: ['uzxmx'],
+      id: location.pathname
+    });
+
+    gitalk.render('custom-comments');
+  </script>
+  <noscript>Please enable JavaScript to view the comments powered by Gitalk.</noscript>
+{% endif %}
