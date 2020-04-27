@@ -2,10 +2,12 @@ source 'https://rubygems.org'
 
 gem 'minimal-mistakes-jekyll', '~> 4.19.1'
 
-gem "github-pages", "~> 204", group: :jekyll_plugins
+if ENV['JEKYLL_ENV'] == 'production'
+  gem "github-pages", "~> 204", group: :jekyll_plugins
 
-group :jekyll_plugins do
-  gem 'jekyll-include-cache', '~> 0.2.0'
+  group :jekyll_plugins do
+    gem 'jekyll-include-cache', '~> 0.2.0'
+  end
 end
 
 # Windows and JRuby does not include zoneinfo files, so bundle the tzinfo-data gem

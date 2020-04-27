@@ -243,5 +243,49 @@ zstyle ':completion:*' list-colors ${(s.:.)LS_COLORS}
 
 Then start a new shell. You shouldn't see ugly green background any more.
 
+### Use vagrant
+
+Vagrant [supports](https://www.vagrantup.com/docs/other/wsl.html#windows-access)
+WSL, but some of Vagrantfile and plugins may not support it. For example, if you
+use ubuntu/bionic64 box, in `~/.vagrant.d/boxes/ubuntu-VAGRANTSLASH-bionic64/0/virtualbox`
+there is a line shown below:
+
+```rb
+vb.customize [ "modifyvm", :id, "--uartmode1", "file", File.join(Dir.pwd, "ubuntu-bionic-18.04-cloudimg-console.log") ]
+```
+
+The above line will stop vagrant working on WSL. Because it sets a WSL path in
+Virtualbox, but Virtualbox cannot find that path, we must convert the WSL path
+to Windows path so that it can work. There is also a quick workaround
+[here](https://github.com/hashicorp/vagrant/issues/8604). For such reason, I
+suggest not to use vagrant on WSL. Instead, use vagrant on Windows directly.
+
+When using vagrant on Windows, the vagrant project should exist outside of WSL
+rootfs so that vagrant can find the correct path.
+
+#### Kernel panic - not syncing
+
+If you run Vagrant Centos/7 box, you may experience an error [Kernel panic - not
+syncing](https://forums.virtualbox.org/viewtopic.php?f=3&t=93990) on Virtualbox
+6.0.8. A workaround is to use Virtualbox 6.0.6. I haven't tried if it works in
+the latest version.
+
+#### Agent forwarding
+
+On Windows, when we run vagrant (located outside of WSL), it cannot find ssh
+agent inside WSL, so ssh agent forwarding may not work. As a workaround, we can
+use ssh directly.
+
+```sh
+# This one will not work.
+vagrant ssh -- -A
+
+# This one will work. Replace the port with the correct port which will be
+# shown when you run `vagrant up` or `vagrant ssh-config`. Below line
+# assumes the current working directory is vagrant project root directory,
+# you may need to ensure the private_key file has correct permission.
+ssh vagrant@localhost -p port -i .vagrant/machines/default/virtualbox/private_key -A
+```
+
 [dotfiles]: https://github.com/uzxmx/dotfiles
 [nvim-how-to-use-windows-clipboard]: https://github.com/neovim/neovim/wiki/FAQ#how-to-use-the-windows-clipboard-from-wsl

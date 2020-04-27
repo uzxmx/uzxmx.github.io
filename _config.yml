@@ -10,6 +10,11 @@ remote_theme: "mmistakes/minimal-mistakes@4.19.1"
 plugins:
   - jekyll-include-cache
 
+comments:
+  provider: "disqus"
+  disqus:
+    shortname: "uzxmx"
+
 defaults:
   - scope:
       path: ""
@@ -19,3 +24,4 @@ defaults:
       toc: true
       toc_sticky: true
       read_time: true
+      comments: true
