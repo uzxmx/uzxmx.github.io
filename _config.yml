@@ -14,6 +14,13 @@ plugins:
 comments:
   provider: "custom"
 
+analytics:
+  provider: "google-gtag"
+  google:
+    tracking_id: "UA-164919405-1"
+
+google_site_verification: "4cV_DkFkOihbmPCkF3LqIVBC3lM0yA0UhentAgp7Mmg"
+
 defaults:
   - scope:
       path: ""
