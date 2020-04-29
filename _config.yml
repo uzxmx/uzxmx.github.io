@@ -20,6 +20,7 @@ analytics:
     tracking_id: "UA-164919405-1"
 
 google_site_verification: "4cV_DkFkOihbmPCkF3LqIVBC3lM0yA0UhentAgp7Mmg"
+bing_site_verification: "E2FD20A4199C5CDBE9E4842CCD5820E0"
 
 defaults:
   - scope:
