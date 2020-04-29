@@ -10,6 +10,7 @@ permalink: /:title:output_ext
 remote_theme: "mmistakes/minimal-mistakes@4.19.1"
 plugins:
   - jekyll-include-cache
+  - jekyll-sitemap
 
 comments:
   provider: "custom"

@@ -7,6 +7,7 @@ if ENV['JEKYLL_ENV'] == 'production'
 
   group :jekyll_plugins do
     gem 'jekyll-include-cache', '~> 0.2.0'
+    gem 'jekyll-sitemap', '~> 1.4'
   end
 end
 
