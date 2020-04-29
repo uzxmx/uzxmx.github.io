@@ -4,8 +4,6 @@ date: 2020-04-22 20:01:04 +0800
 categories: java
 ---
 
-### Preface
-
 Java is a language whose source files are compiled to bytecode. Unlike C/C++, we
 cannot use preprocessing directive such as `#ifdef` syntactically. Suppose there is
 such a case that normally a Java application runs with an annotation, but when
