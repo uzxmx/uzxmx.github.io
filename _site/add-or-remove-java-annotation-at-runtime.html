@@ -1,0 +1,483 @@
+<!doctype html>
+<!--
+  Minimal Mistakes Jekyll Theme 4.19.1 by Michael Rose
+  Copyright 2013-2019 Michael Rose - mademistakes.com | @mmistakes
+  Free for personal and commercial use under the MIT license
+  https://github.com/mmistakes/minimal-mistakes/blob/master/LICENSE
+-->
+<html lang="en" class="no-js">
+  <head>
+    <meta charset="utf-8">
+
+<!-- begin _includes/seo.html --><title>Add or remove Java annotation at runtime - Mingxiang’s blog</title>
+<meta name="description" content="Java is a language whose source files are compiled to bytecode. Unlike C/C++, we cannot use preprocessing directive such as #ifdef syntactically. Suppose there is such a case that normally a Java application runs with an annotation, but when it’s launched with some environment variable, then that annotation shouldn’t be defined (should be removed). For example:  ">
+
+
+
+<meta property="og:type" content="article">
+<meta property="og:locale" content="en_US">
+<meta property="og:site_name" content="Mingxiang's blog">
+<meta property="og:title" content="Add or remove Java annotation at runtime">
+<meta property="og:url" content="https://uzxmx.github.io/add-or-remove-java-annotation-at-runtime.html">
+
+
+  <meta property="og:description" content="Java is a language whose source files are compiled to bytecode. Unlike C/C++, we cannot use preprocessing directive such as #ifdef syntactically. Suppose there is such a case that normally a Java application runs with an annotation, but when it’s launched with some environment variable, then that annotation shouldn’t be defined (should be removed). For example:  ">
+
+
+
+
+
+
+
+  <meta property="article:published_time" content="2020-04-22T20:01:04+08:00">
+
+
+
+
+
+
+<link rel="canonical" href="https://uzxmx.github.io/add-or-remove-java-annotation-at-runtime.html">
+
+
+
+
+<script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    
+      "@type": "Person",
+      "name": null,
+      "url": "https://uzxmx.github.io/"
+    
+  }
+</script>
+
+
+  <meta name="google-site-verification" content="4cV_DkFkOihbmPCkF3LqIVBC3lM0yA0UhentAgp7Mmg" />
+
+
+  <meta name="msvalidate.01" content="E2FD20A4199C5CDBE9E4842CCD5820E0">
+
+
+
+
+<!-- end _includes/seo.html -->
+
+
+<link href="/feed.xml" type="application/atom+xml" rel="alternate" title="Mingxiang's blog Feed">
+
+<!-- https://t.co/dKP3o1e -->
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<script>
+  document.documentElement.className = document.documentElement.className.replace(/\bno-js\b/g, '') + ' js ';
+</script>
+
+<!-- For all browsers -->
+<link rel="stylesheet" href="/assets/css/main.css">
+
+<!--[if IE]>
+  <style>
+    /* old IE unsupported flexbox fixes */
+    .greedy-nav .site-title {
+      padding-right: 3em;
+    }
+    .greedy-nav button {
+      position: absolute;
+      top: 0;
+      right: 0;
+      height: 100%;
+    }
+  </style>
+<![endif]-->
+
+
+
+    <link href="/assets/styles/snippet.css" rel="stylesheet" type="text/css">
+
+  </head>
+
+  <body class="layout--single">
+    <nav class="skip-links">
+  <h2 class="screen-reader-text">Skip links</h2>
+  <ul>
+    <li><a href="#site-nav" class="screen-reader-shortcut">Skip to primary navigation</a></li>
+    <li><a href="#main" class="screen-reader-shortcut">Skip to content</a></li>
+    <li><a href="#footer" class="screen-reader-shortcut">Skip to footer</a></li>
+  </ul>
+</nav>
+
+    <!--[if lt IE 9]>
+<div class="notice--danger align-center" style="margin: 0;">You are using an <strong>outdated</strong> browser. Please <a href="https://browsehappy.com/">upgrade your browser</a> to improve your experience.</div>
+<![endif]-->
+
+    
+
+<div class="masthead">
+  <div class="masthead__inner-wrap">
+    <div class="masthead__menu">
+      <nav id="site-nav" class="greedy-nav">
+        
+        <a class="site-title" href="/">
+          Mingxiang's blog
+          
+        </a>
+        <ul class="visible-links"></ul>
+        
+        <button class="greedy-nav__toggle hidden" type="button">
+          <span class="visually-hidden">Toggle menu</span>
+          <div class="navicon"></div>
+        </button>
+        <ul class="hidden-links hidden"></ul>
+      </nav>
+    </div>
+  </div>
+</div>
+
+
+    <div class="initial-content">
+      
+
+
+
+<div id="main" role="main">
+  
+
+
+  <article class="page" itemscope itemtype="https://schema.org/CreativeWork">
+    <meta itemprop="headline" content="Add or remove Java annotation at runtime">
+    <meta itemprop="description" content="Java is a language whose source files are compiled to bytecode. Unlike C/C++, wecannot use preprocessing directive such as #ifdef syntactically. Suppose there issuch a case that normally a Java application runs with an annotation, but whenit’s launched with some environment variable, then that annotation shouldn’t bedefined (should be removed). For example:">
+    <meta itemprop="datePublished" content="2020-04-22T20:01:04+08:00">
+    
+
+    <div class="page__inner-wrap">
+      
+        <header>
+          <h1 id="page-title" class="page__title" itemprop="headline">Add or remove Java annotation at runtime
+</h1>
+          
+            <p class="page__meta"><i class="far fa-clock" aria-hidden="true"></i> 
+
+
+
+
+  3 minute read
+
+</p>
+          
+        </header>
+      
+
+      <section class="page__content" itemprop="text">
+        
+          <aside class="sidebar__right sticky">
+            <nav class="toc">
+              <header><h4 class="nav__title"><i class="fas fa-file-alt"></i> On this page</h4></header>
+              <ul class="toc__menu">
+  <li><a href="#add-annotation-to-a-java-class-field">Add annotation to a Java class field</a></li>
+  <li><a href="#remove-annotation-from-a-java-class-field">Remove annotation from a Java class field</a></li>
+  <li><a href="#test-it-out">Test it out</a></li>
+  <li><a href="#gotchas">Gotchas</a></li>
+  <li><a href="#source-codes">Source codes</a></li>
+</ul>
+
+            </nav>
+          </aside>
+        
+        <p>Java is a language whose source files are compiled to bytecode. Unlike C/C++, we
+cannot use preprocessing directive such as <code class="highlighter-rouge">#ifdef</code> syntactically. Suppose there is
+such a case that normally a Java application runs with an annotation, but when
+it’s launched with some environment variable, then that annotation shouldn’t be
+defined (should be removed). For example:</p>
+
+<div class="language-java highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="nd">@Entity</span>
+<span class="kd">public</span> <span class="kd">class</span> <span class="nc">Foo</span> <span class="o">{</span>
+
+  <span class="nd">@Id</span>
+  <span class="c1">// If application is launched with Role=replica, we don't want the below line.</span>
+  <span class="nd">@GeneratedValue</span><span class="o">(</span><span class="n">strategy</span> <span class="o">=</span> <span class="nc">GenerationType</span><span class="o">.</span><span class="na">IDENTITY</span><span class="o">)</span>
+  <span class="kd">private</span> <span class="nc">Long</span> <span class="n">id</span><span class="o">;</span>
+<span class="o">}</span>
+</code></pre></div></div>
+
+<p>So how exactly do we solve the above issue?</p>
+
+<p>Basically, there are two ways. One way is to use a preprocessing step. We can use
+<code class="highlighter-rouge">sed -i -e '/PATTERN/d' YOUR_FILE.java</code> to pre-process when building a jar
+package. This is especially useful when we use docker to build with different
+options. Another way is to add/remove the annotation dynamically at runtime. For
+this purpose, we need to import two dependencies: <a href="https://www.javassist.org/">Javasist</a> and <a href="https://bytebuddy.net/#/">Byte Buddy</a>.</p>
+
+<p>We will use <a href="https://www.javassist.org/">Javasist</a> to modify and generate bytecodes, and <a href="bytebuddy">Byte
+Buddy</a> as instrumentation agent to retransform class. We will use
+Spring Cloud to build a demo project and add some tests. The demo project can be
+found <a href="https://github.com/uzxmx/javasist-demo">here</a>.</p>
+
+<p class="notice--info"><strong>Tip:</strong> For more information about Java instrumentation, please visit
+<a href="https://docs.oracle.com/javase/8/docs/api/java/lang/instrument/package-summary.html">here</a>.</p>
+
+<h3 id="add-annotation-to-a-java-class-field">Add annotation to a Java class field</h3>
+
+<p>Here is the core part of code snippets that add annotation to a Java class
+field:</p>
+
+<div class="language-java highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kd">public</span> <span class="kd">class</span> <span class="nc">JavasistUtils</span> <span class="o">{</span>
+
+    <span class="kd">public</span> <span class="kd">static</span> <span class="kt">void</span> <span class="nf">addAnnotationToField</span><span class="o">(</span><span class="nc">Class</span><span class="o">&lt;?&gt;</span> <span class="n">clazz</span><span class="o">,</span> <span class="nc">String</span> <span class="n">fieldName</span><span class="o">,</span> <span class="nc">Class</span><span class="o">&lt;?&gt;</span> <span class="n">annotationClass</span><span class="o">,</span>
+                                            <span class="nc">BiConsumer</span><span class="o">&lt;</span><span class="nc">Annotation</span><span class="o">,</span> <span class="nc">ConstPool</span><span class="o">&gt;</span> <span class="n">initAnnotation</span><span class="o">)</span> <span class="o">{</span>
+        <span class="nc">ClassPool</span> <span class="n">pool</span> <span class="o">=</span> <span class="nc">ClassPool</span><span class="o">.</span><span class="na">getDefault</span><span class="o">();</span>
+        <span class="nc">CtClass</span> <span class="n">ctClass</span><span class="o">;</span>
+        <span class="k">try</span> <span class="o">{</span>
+            <span class="n">ctClass</span> <span class="o">=</span> <span class="n">pool</span><span class="o">.</span><span class="na">getCtClass</span><span class="o">(</span><span class="n">clazz</span><span class="o">.</span><span class="na">getName</span><span class="o">());</span>
+            <span class="k">if</span> <span class="o">(</span><span class="n">ctClass</span><span class="o">.</span><span class="na">isFrozen</span><span class="o">())</span> <span class="o">{</span>
+                <span class="n">ctClass</span><span class="o">.</span><span class="na">defrost</span><span class="o">();</span>
+            <span class="o">}</span>
+            <span class="nc">CtField</span> <span class="n">ctField</span> <span class="o">=</span> <span class="n">ctClass</span><span class="o">.</span><span class="na">getDeclaredField</span><span class="o">(</span><span class="n">fieldName</span><span class="o">);</span>
+            <span class="nc">ConstPool</span> <span class="n">constPool</span> <span class="o">=</span> <span class="n">ctClass</span><span class="o">.</span><span class="na">getClassFile</span><span class="o">().</span><span class="na">getConstPool</span><span class="o">();</span>
+
+            <span class="nc">Annotation</span> <span class="n">annotation</span> <span class="o">=</span> <span class="k">new</span> <span class="nc">Annotation</span><span class="o">(</span><span class="n">annotationClass</span><span class="o">.</span><span class="na">getName</span><span class="o">(),</span> <span class="n">constPool</span><span class="o">);</span>
+            <span class="k">if</span> <span class="o">(</span><span class="n">initAnnotation</span> <span class="o">!=</span> <span class="kc">null</span><span class="o">)</span> <span class="o">{</span>
+                <span class="n">initAnnotation</span><span class="o">.</span><span class="na">accept</span><span class="o">(</span><span class="n">annotation</span><span class="o">,</span> <span class="n">constPool</span><span class="o">);</span>
+            <span class="o">}</span>
+
+            <span class="nc">AnnotationsAttribute</span> <span class="n">attr</span> <span class="o">=</span> <span class="n">getAnnotationsAttributeFromField</span><span class="o">(</span><span class="n">ctField</span><span class="o">);</span>
+            <span class="k">if</span> <span class="o">(</span><span class="n">attr</span> <span class="o">==</span> <span class="kc">null</span><span class="o">)</span> <span class="o">{</span>
+                <span class="n">attr</span> <span class="o">=</span> <span class="k">new</span> <span class="nc">AnnotationsAttribute</span><span class="o">(</span><span class="n">constPool</span><span class="o">,</span> <span class="nc">AnnotationsAttribute</span><span class="o">.</span><span class="na">visibleTag</span><span class="o">);</span>
+                <span class="n">ctField</span><span class="o">.</span><span class="na">getFieldInfo</span><span class="o">().</span><span class="na">addAttribute</span><span class="o">(</span><span class="n">attr</span><span class="o">);</span>
+            <span class="o">}</span>
+            <span class="n">attr</span><span class="o">.</span><span class="na">addAnnotation</span><span class="o">(</span><span class="n">annotation</span><span class="o">);</span>
+
+            <span class="n">retransformClass</span><span class="o">(</span><span class="n">clazz</span><span class="o">,</span> <span class="n">ctClass</span><span class="o">.</span><span class="na">toBytecode</span><span class="o">());</span>
+        <span class="o">}</span> <span class="k">catch</span> <span class="o">(</span><span class="nc">NotFoundException</span> <span class="o">|</span> <span class="nc">IOException</span> <span class="o">|</span> <span class="nc">CannotCompileException</span> <span class="n">e</span><span class="o">)</span> <span class="o">{</span>
+            <span class="n">e</span><span class="o">.</span><span class="na">printStackTrace</span><span class="o">();</span>
+        <span class="o">}</span>
+    <span class="o">}</span>
+<span class="o">}</span>
+</code></pre></div></div>
+
+<h3 id="remove-annotation-from-a-java-class-field">Remove annotation from a Java class field</h3>
+
+<p>Here is the core part of code snippets that remove annotation from a Java class
+field:</p>
+
+<div class="language-java highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kd">public</span> <span class="kd">class</span> <span class="nc">JavasistUtils</span> <span class="o">{</span>
+
+    <span class="kd">public</span> <span class="kd">static</span> <span class="kt">void</span> <span class="nf">removeAnnotationFromField</span><span class="o">(</span><span class="nc">Class</span><span class="o">&lt;?&gt;</span> <span class="n">clazz</span><span class="o">,</span> <span class="nc">String</span> <span class="n">fieldName</span><span class="o">,</span> <span class="nc">Class</span><span class="o">&lt;?&gt;</span> <span class="n">annotationClass</span><span class="o">)</span> <span class="o">{</span>
+        <span class="nc">ClassPool</span> <span class="n">pool</span> <span class="o">=</span> <span class="nc">ClassPool</span><span class="o">.</span><span class="na">getDefault</span><span class="o">();</span>
+        <span class="nc">CtClass</span> <span class="n">ctClass</span><span class="o">;</span>
+        <span class="k">try</span> <span class="o">{</span>
+            <span class="n">ctClass</span> <span class="o">=</span> <span class="n">pool</span><span class="o">.</span><span class="na">getCtClass</span><span class="o">(</span><span class="n">clazz</span><span class="o">.</span><span class="na">getName</span><span class="o">());</span>
+            <span class="k">if</span> <span class="o">(</span><span class="n">ctClass</span><span class="o">.</span><span class="na">isFrozen</span><span class="o">())</span> <span class="o">{</span>
+                <span class="n">ctClass</span><span class="o">.</span><span class="na">defrost</span><span class="o">();</span>
+            <span class="o">}</span>
+            <span class="nc">CtField</span> <span class="n">ctField</span> <span class="o">=</span> <span class="n">ctClass</span><span class="o">.</span><span class="na">getDeclaredField</span><span class="o">(</span><span class="n">fieldName</span><span class="o">);</span>
+
+            <span class="nc">AnnotationsAttribute</span> <span class="n">attr</span> <span class="o">=</span> <span class="n">getAnnotationsAttributeFromField</span><span class="o">(</span><span class="n">ctField</span><span class="o">);</span>
+            <span class="k">if</span> <span class="o">(</span><span class="n">attr</span> <span class="o">!=</span> <span class="kc">null</span><span class="o">)</span> <span class="o">{</span>
+                <span class="n">attr</span><span class="o">.</span><span class="na">removeAnnotation</span><span class="o">(</span><span class="n">annotationClass</span><span class="o">.</span><span class="na">getName</span><span class="o">());</span>
+            <span class="o">}</span>
+
+            <span class="n">retransformClass</span><span class="o">(</span><span class="n">clazz</span><span class="o">,</span> <span class="n">ctClass</span><span class="o">.</span><span class="na">toBytecode</span><span class="o">());</span>
+        <span class="o">}</span> <span class="k">catch</span> <span class="o">(</span><span class="nc">NotFoundException</span> <span class="o">|</span> <span class="nc">IOException</span> <span class="o">|</span> <span class="nc">CannotCompileException</span> <span class="n">e</span><span class="o">)</span> <span class="o">{</span>
+            <span class="n">e</span><span class="o">.</span><span class="na">printStackTrace</span><span class="o">();</span>
+        <span class="o">}</span>
+    <span class="o">}</span>
+<span class="o">}</span>
+</code></pre></div></div>
+
+<h3 id="test-it-out">Test it out</h3>
+
+<p>First, we add two classes: Base and Book.</p>
+
+<div class="language-java highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="nd">@MappedSuperclass</span>
+<span class="kd">public</span> <span class="kd">class</span> <span class="nc">Base</span> <span class="o">{</span>
+
+    <span class="nd">@Id</span>
+    <span class="nd">@GeneratedValue</span><span class="o">(</span><span class="n">strategy</span> <span class="o">=</span> <span class="nc">GenerationType</span><span class="o">.</span><span class="na">IDENTITY</span><span class="o">)</span>
+    <span class="kd">private</span> <span class="nc">Long</span> <span class="n">id</span><span class="o">;</span>
+
+    <span class="kd">public</span> <span class="nc">Long</span> <span class="nf">getId</span><span class="o">()</span> <span class="o">{</span>
+        <span class="k">return</span> <span class="n">id</span><span class="o">;</span>
+    <span class="o">}</span>
+
+    <span class="kd">public</span> <span class="kt">void</span> <span class="nf">setId</span><span class="o">(</span><span class="nc">Long</span> <span class="n">id</span><span class="o">)</span> <span class="o">{</span>
+        <span class="k">this</span><span class="o">.</span><span class="na">id</span> <span class="o">=</span> <span class="n">id</span><span class="o">;</span>
+    <span class="o">}</span>
+<span class="o">}</span>
+</code></pre></div></div>
+
+<div class="language-java highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="nd">@Entity</span>
+<span class="kd">public</span> <span class="kd">class</span> <span class="nc">Book</span> <span class="kd">extends</span> <span class="nc">Base</span> <span class="o">{</span>
+
+    <span class="kd">private</span> <span class="nc">String</span> <span class="n">name</span><span class="o">;</span>
+
+    <span class="kd">public</span> <span class="nc">String</span> <span class="nf">getName</span><span class="o">()</span> <span class="o">{</span>
+        <span class="k">return</span> <span class="n">name</span><span class="o">;</span>
+    <span class="o">}</span>
+
+    <span class="kd">public</span> <span class="kt">void</span> <span class="nf">setName</span><span class="o">(</span><span class="nc">String</span> <span class="n">name</span><span class="o">)</span> <span class="o">{</span>
+        <span class="k">this</span><span class="o">.</span><span class="na">name</span> <span class="o">=</span> <span class="n">name</span><span class="o">;</span>
+    <span class="o">}</span>
+<span class="o">}</span>
+</code></pre></div></div>
+
+<p>Then let’s add unit tests to test if we can remove an annotation successfully.</p>
+
+<div class="language-java highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="nd">@ExtendWith</span><span class="o">(</span><span class="nc">Extension</span><span class="o">.</span><span class="na">class</span><span class="o">)</span>
+<span class="nd">@DataJpaTest</span>
+<span class="nd">@TestExecutionListeners</span><span class="o">(</span>
+    <span class="n">listeners</span> <span class="o">=</span> <span class="nc">DirtiesContextBeforeAndAfterClassTestExecutionListener</span><span class="o">.</span><span class="na">class</span><span class="o">,</span>
+    <span class="n">mergeMode</span> <span class="o">=</span> <span class="nc">MergeMode</span><span class="o">.</span><span class="na">MERGE_WITH_DEFAULTS</span>
+<span class="o">)</span>
+<span class="kd">public</span> <span class="kd">class</span> <span class="nc">JavasistUtilsTests</span> <span class="o">{</span>
+
+    <span class="nd">@Autowired</span>
+    <span class="kd">private</span> <span class="nc">BookRepository</span> <span class="n">bookRepository</span><span class="o">;</span>
+
+    <span class="nd">@Test</span>
+    <span class="kt">void</span> <span class="nf">testExceptionThrownWhenIdNotSpecified</span><span class="o">()</span> <span class="o">{</span>
+        <span class="nc">JpaSystemException</span> <span class="n">exception</span> <span class="o">=</span> <span class="n">assertThrows</span><span class="o">(</span><span class="nc">JpaSystemException</span><span class="o">.</span><span class="na">class</span><span class="o">,</span> <span class="o">()</span> <span class="o">-&gt;</span> <span class="o">{</span>
+            <span class="nc">Book</span> <span class="n">book</span> <span class="o">=</span> <span class="k">new</span> <span class="nc">Book</span><span class="o">();</span>
+            <span class="n">book</span><span class="o">.</span><span class="na">setName</span><span class="o">(</span><span class="s">"Learn Spring"</span><span class="o">);</span>
+            <span class="n">bookRepository</span><span class="o">.</span><span class="na">saveAndFlush</span><span class="o">(</span><span class="n">book</span><span class="o">);</span>
+        <span class="o">});</span>
+
+        <span class="n">assertTrue</span><span class="o">(</span><span class="n">exception</span><span class="o">.</span><span class="na">getMessage</span><span class="o">().</span><span class="na">startsWith</span><span class="o">(</span><span class="s">"ids for this class must be manually assigned before calling save()"</span><span class="o">));</span>
+    <span class="o">}</span>
+
+    <span class="nd">@Test</span>
+    <span class="kt">void</span> <span class="nf">testOKWhenIdSpecified</span><span class="o">()</span> <span class="o">{</span>
+        <span class="nc">Book</span> <span class="n">book</span> <span class="o">=</span> <span class="k">new</span> <span class="nc">Book</span><span class="o">();</span>
+        <span class="n">book</span><span class="o">.</span><span class="na">setId</span><span class="o">(</span><span class="mi">1L</span><span class="o">);</span>
+        <span class="n">book</span><span class="o">.</span><span class="na">setName</span><span class="o">(</span><span class="s">"Learn Spring"</span><span class="o">);</span>
+        <span class="n">bookRepository</span><span class="o">.</span><span class="na">saveAndFlush</span><span class="o">(</span><span class="n">book</span><span class="o">);</span>
+
+        <span class="nc">Book</span> <span class="n">b</span> <span class="o">=</span> <span class="n">bookRepository</span><span class="o">.</span><span class="na">findById</span><span class="o">(</span><span class="mi">1L</span><span class="o">).</span><span class="na">get</span><span class="o">();</span>
+        <span class="n">assertTrue</span><span class="o">(</span><span class="n">b</span><span class="o">.</span><span class="na">getName</span><span class="o">().</span><span class="na">equals</span><span class="o">(</span><span class="s">"Learn Spring"</span><span class="o">));</span>
+    <span class="o">}</span>
+
+    <span class="kd">public</span> <span class="kd">static</span> <span class="kd">class</span> <span class="nc">Extension</span> <span class="kd">implements</span> <span class="nc">BeforeAllCallback</span><span class="o">,</span> <span class="nc">AfterAllCallback</span> <span class="o">{</span>
+
+        <span class="nd">@Override</span>
+        <span class="kd">public</span> <span class="kt">void</span> <span class="nf">beforeAll</span><span class="o">(</span><span class="nc">ExtensionContext</span> <span class="n">arg0</span><span class="o">)</span> <span class="kd">throws</span> <span class="nc">Exception</span> <span class="o">{</span>
+            <span class="nc">JavasistUtils</span><span class="o">.</span><span class="na">removeAnnotationFromField</span><span class="o">(</span><span class="nc">Base</span><span class="o">.</span><span class="na">class</span><span class="o">,</span> <span class="s">"id"</span><span class="o">,</span> <span class="nc">GeneratedValue</span><span class="o">.</span><span class="na">class</span><span class="o">);</span>
+        <span class="o">}</span>
+
+        <span class="nd">@Override</span>
+        <span class="kd">public</span> <span class="kt">void</span> <span class="nf">afterAll</span><span class="o">(</span><span class="nc">ExtensionContext</span> <span class="n">arg0</span><span class="o">)</span> <span class="kd">throws</span> <span class="nc">Exception</span> <span class="o">{</span>
+            <span class="nc">JavasistUtils</span><span class="o">.</span><span class="na">addAnnotationToField</span><span class="o">(</span><span class="nc">Base</span><span class="o">.</span><span class="na">class</span><span class="o">,</span> <span class="s">"id"</span><span class="o">,</span> <span class="nc">GeneratedValue</span><span class="o">.</span><span class="na">class</span><span class="o">,</span> <span class="o">(</span><span class="n">annotation</span><span class="o">,</span> <span class="n">constPool</span><span class="o">)</span> <span class="o">-&gt;</span> <span class="o">{</span>
+                <span class="nc">EnumMemberValue</span> <span class="n">memberValue</span> <span class="o">=</span> <span class="k">new</span> <span class="nc">EnumMemberValue</span><span class="o">(</span><span class="n">constPool</span><span class="o">);</span>
+                <span class="n">memberValue</span><span class="o">.</span><span class="na">setType</span><span class="o">(</span><span class="nc">GenerationType</span><span class="o">.</span><span class="na">class</span><span class="o">.</span><span class="na">getName</span><span class="o">());</span>
+                <span class="n">memberValue</span><span class="o">.</span><span class="na">setValue</span><span class="o">(</span><span class="nc">GenerationType</span><span class="o">.</span><span class="na">IDENTITY</span><span class="o">.</span><span class="na">name</span><span class="o">());</span>
+                <span class="n">annotation</span><span class="o">.</span><span class="na">addMemberValue</span><span class="o">(</span><span class="s">"strategy"</span><span class="o">,</span> <span class="n">memberValue</span><span class="o">);</span>
+            <span class="o">});</span>
+        <span class="o">}</span>
+    <span class="o">}</span>
+<span class="o">}</span>
+</code></pre></div></div>
+
+<h3 id="gotchas">Gotchas</h3>
+
+<p>Note the above <code class="highlighter-rouge">Extension</code> class. <code class="highlighter-rouge">Extension#beforeAll</code> will be invoked before
+any test in <code class="highlighter-rouge">JavasistUtilsTests</code> runs. <code class="highlighter-rouge">Extension#afterAll</code> will be invoked
+after all tests in <code class="highlighter-rouge">JavasistUtilsTests</code> run. So it means before any test in
+<code class="highlighter-rouge">JavaJavasistUtilsTests</code> runs, we remove annotation <code class="highlighter-rouge">@GeneratedValue</code> from
+<code class="highlighter-rouge">Base#id</code> field. If we don’t specify an id value, then invoking
+<code class="highlighter-rouge">BookRepository#saveAndFlush</code> will throw an exception that says “ids must be
+manually assigned”. When all tests in <code class="highlighter-rouge">JavaJavasistUtilsTests</code> finish, we add
+that annotation back so that other test classes can run normally.</p>
+
+<p>Another gotcha is we add a custom class
+<code class="highlighter-rouge">DirtiesContextBeforeAndAfterClassTestExecutionListener.class</code> as test execution
+listener. We need to ensure the spring application context is marked as dirty
+both BEFORE and AFTER class to have JPA entity classes normally parsed in all
+test classes. We cannot use <code class="highlighter-rouge">@DirtiesContext</code> here, because it only mark context
+as dirty either BEFORE or AFTER. For more information about this gotcha, please
+visit the stackoverflow <a href="https://stackoverflow.com/a/39292587">anwser</a>.</p>
+
+<h3 id="source-codes">Source codes</h3>
+
+<p>The demo project with full source codes is at <a href="https://github.com/uzxmx/javasist-demo">here</a>.</p>
+
+
+        
+      </section>
+
+      <footer class="page__meta">
+        
+        
+
+
+        
+          <p class="page__date"><strong><i class="fas fa-fw fa-calendar-alt" aria-hidden="true"></i> Updated:</strong> <time datetime="2020-04-22T20:01:04+08:00">April 22, 2020</time></p>
+        
+      </footer>
+
+      
+
+      
+  <nav class="pagination">
+    
+      <a href="/wsl-tricks.html" class="pagination--pager" title="WSL tricks
+">Previous</a>
+    
+    
+      <a href="/renew-certificates-inside-outside-kubernetes.html" class="pagination--pager" title="Renew SSL certificates inside and outside Kubernetes
+">Next</a>
+    
+  </nav>
+
+    </div>
+
+    
+  </article>
+
+  
+  
+</div>
+
+    </div>
+
+    
+
+    <div id="footer" class="page__footer">
+      <footer>
+        <!-- start custom footer snippets -->
+
+<!-- end custom footer snippets -->
+        <div class="page__footer-follow">
+  <ul class="social-icons">
+    
+
+    
+
+    <li><a href="/feed.xml"><i class="fas fa-fw fa-rss-square" aria-hidden="true"></i> Feed</a></li>
+  </ul>
+</div>
+
+<div class="page__footer-copyright">&copy; 2020 Mingxiang's blog. Powered by <a href="https://jekyllrb.com" rel="nofollow">Jekyll</a> &amp; <a href="https://mademistakes.com/work/minimal-mistakes-jekyll-theme/" rel="nofollow">Minimal Mistakes</a>.</div>
+
+      </footer>
+    </div>
+
+    
+  
+    <script src="/assets/scripts/snippet.js"></script>
+  
+
+
+
+
+
+
+
+    
+
+
+
+
+
+
+
+  </body>
+</html>

@@ -1,0 +1,652 @@
+<!doctype html>
+<!--
+  Minimal Mistakes Jekyll Theme 4.19.1 by Michael Rose
+  Copyright 2013-2019 Michael Rose - mademistakes.com | @mmistakes
+  Free for personal and commercial use under the MIT license
+  https://github.com/mmistakes/minimal-mistakes/blob/master/LICENSE
+-->
+<html lang="en" class="no-js">
+  <head>
+    <meta charset="utf-8">
+
+<!-- begin _includes/seo.html --><title>Prometheus TSDB internals - Mingxiang’s blog</title>
+<meta name="description" content="Prometheus has local and remote storage. At the beginning, it creates a local storage, a remote storage, and a fanout storage. A fanout storage is like a wrapper storage that wraps a primary storage and multiple secondary storages, which proxies reads and writes through to the underlying.  ">
+
+
+
+<meta property="og:type" content="article">
+<meta property="og:locale" content="en_US">
+<meta property="og:site_name" content="Mingxiang's blog">
+<meta property="og:title" content="Prometheus TSDB internals">
+<meta property="og:url" content="https://uzxmx.github.io/prometheus-tsdb-internals.html">
+
+
+  <meta property="og:description" content="Prometheus has local and remote storage. At the beginning, it creates a local storage, a remote storage, and a fanout storage. A fanout storage is like a wrapper storage that wraps a primary storage and multiple secondary storages, which proxies reads and writes through to the underlying.  ">
+
+
+
+
+
+
+
+  <meta property="article:published_time" content="2020-05-24T20:15:00+08:00">
+
+
+
+
+
+
+<link rel="canonical" href="https://uzxmx.github.io/prometheus-tsdb-internals.html">
+
+
+
+
+<script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    
+      "@type": "Person",
+      "name": null,
+      "url": "https://uzxmx.github.io/"
+    
+  }
+</script>
+
+
+  <meta name="google-site-verification" content="4cV_DkFkOihbmPCkF3LqIVBC3lM0yA0UhentAgp7Mmg" />
+
+
+  <meta name="msvalidate.01" content="E2FD20A4199C5CDBE9E4842CCD5820E0">
+
+
+
+
+<!-- end _includes/seo.html -->
+
+
+<link href="/feed.xml" type="application/atom+xml" rel="alternate" title="Mingxiang's blog Feed">
+
+<!-- https://t.co/dKP3o1e -->
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<script>
+  document.documentElement.className = document.documentElement.className.replace(/\bno-js\b/g, '') + ' js ';
+</script>
+
+<!-- For all browsers -->
+<link rel="stylesheet" href="/assets/css/main.css">
+
+<!--[if IE]>
+  <style>
+    /* old IE unsupported flexbox fixes */
+    .greedy-nav .site-title {
+      padding-right: 3em;
+    }
+    .greedy-nav button {
+      position: absolute;
+      top: 0;
+      right: 0;
+      height: 100%;
+    }
+  </style>
+<![endif]-->
+
+
+
+    <link href="/assets/styles/snippet.css" rel="stylesheet" type="text/css">
+
+  </head>
+
+  <body class="layout--single">
+    <nav class="skip-links">
+  <h2 class="screen-reader-text">Skip links</h2>
+  <ul>
+    <li><a href="#site-nav" class="screen-reader-shortcut">Skip to primary navigation</a></li>
+    <li><a href="#main" class="screen-reader-shortcut">Skip to content</a></li>
+    <li><a href="#footer" class="screen-reader-shortcut">Skip to footer</a></li>
+  </ul>
+</nav>
+
+    <!--[if lt IE 9]>
+<div class="notice--danger align-center" style="margin: 0;">You are using an <strong>outdated</strong> browser. Please <a href="https://browsehappy.com/">upgrade your browser</a> to improve your experience.</div>
+<![endif]-->
+
+    
+
+<div class="masthead">
+  <div class="masthead__inner-wrap">
+    <div class="masthead__menu">
+      <nav id="site-nav" class="greedy-nav">
+        
+        <a class="site-title" href="/">
+          Mingxiang's blog
+          
+        </a>
+        <ul class="visible-links"></ul>
+        
+        <button class="greedy-nav__toggle hidden" type="button">
+          <span class="visually-hidden">Toggle menu</span>
+          <div class="navicon"></div>
+        </button>
+        <ul class="hidden-links hidden"></ul>
+      </nav>
+    </div>
+  </div>
+</div>
+
+
+    <div class="initial-content">
+      
+
+
+
+<div id="main" role="main">
+  
+
+
+  <article class="page" itemscope itemtype="https://schema.org/CreativeWork">
+    <meta itemprop="headline" content="Prometheus TSDB internals">
+    <meta itemprop="description" content="Prometheus has local and remote storage. At the beginning, it creates a localstorage, a remote storage, and a fanout storage. A fanout storage is like awrapper storage that wraps a primary storage and multiple secondary storages,which proxies reads and writes through to the underlying.">
+    <meta itemprop="datePublished" content="2020-05-24T20:15:00+08:00">
+    
+
+    <div class="page__inner-wrap">
+      
+        <header>
+          <h1 id="page-title" class="page__title" itemprop="headline">Prometheus TSDB internals
+</h1>
+          
+            <p class="page__meta"><i class="far fa-clock" aria-hidden="true"></i> 
+
+
+
+
+  8 minute read
+
+</p>
+          
+        </header>
+      
+
+      <section class="page__content" itemprop="text">
+        
+          <aside class="sidebar__right sticky">
+            <nav class="toc">
+              <header><h4 class="nav__title"><i class="fas fa-file-alt"></i> On this page</h4></header>
+              <ul class="toc__menu">
+  <li><a href="#memory-series">Memory series</a></li>
+  <li><a href="#head">Head</a>
+    <ul>
+      <li><a href="#stripe-series">Stripe series</a></li>
+      <li><a href="#head-appender">Head appender</a></li>
+    </ul>
+  </li>
+  <li><a href="#compact">Compact</a>
+    <ul>
+      <li><a href="#compact-head">Compact head</a></li>
+    </ul>
+  </li>
+  <li><a href="#postings">Postings</a></li>
+  <li><a href="#on-disk-layout">On-disk layout</a>
+    <ul>
+      <li><a href="#chunks">Chunks</a></li>
+      <li><a href="#index">Index</a></li>
+      <li><a href="#tombstones">Tombstones</a></li>
+    </ul>
+  </li>
+</ul>
+
+            </nav>
+          </aside>
+        
+        <p>Prometheus has local and remote storage. At the beginning, it creates a local
+storage, a remote storage, and a fanout storage. A fanout storage is like a
+wrapper storage that wraps a primary storage and multiple secondary storages,
+which proxies reads and writes through to the underlying.</p>
+
+<p>Internally, Prometheus uses a type of struct called <code class="highlighter-rouge">Head</code> to maintain a series
+of data, and to persist the in-memory data to the disk.</p>
+
+<p>When opening a local db by <code class="highlighter-rouge">tsdb.Open()</code>, it loads data from the write ahead log
+and prepares the head for writes. It then starts a goroutine to compact two-hour
+blocks per minute (with exponential backoff on error).</p>
+
+<h2 id="memory-series">Memory series</h2>
+
+<p>In Prometheus, a series is a struct of type <code class="highlighter-rouge">memSeries</code>, which contains an ID
+(also called <code class="highlighter-rouge">ref</code>), a label set, and other fields.</p>
+
+<p>A series holds a slice of memory chunks that each of them is of type <code class="highlighter-rouge">memChunk</code>,
+which is used to store timestamp and value pairs (samples). Samples are appended
+(encoded) into a memory chunk. When some condition matches, a chunk is marked as
+complete (it will be compacted) and a new chunk is created (analogous to <code class="highlighter-rouge">cut</code>).
+The <code class="highlighter-rouge">headChunk</code> field always points to the current chunk to append.</p>
+
+<figure class="highlight">
+  <div class="snippet-header">
+    <div class="snippet-name"><span>tsdb/head.go</span></div>
+    <div class="snippet-actions">
+      <button class="snippet-action-copy" data-snippet="dHlwZSBtZW1TZXJpZXMgc3RydWN0IHsKCXN5bmMuUldNdXRleAoKCXJlZiAg
+ICAgICAgICB1aW50NjQKCWxzZXQgICAgICAgICBsYWJlbHMuTGFiZWxzCglj
+aHVua3MgICAgICAgW10qbWVtQ2h1bmsKCWhlYWRDaHVuayAgICAqbWVtQ2h1
+bmsKCWNodW5rUmFuZ2UgICBpbnQ2NAoJZmlyc3RDaHVua0lEIGludAoKCW5l
+eHRBdCAgICAgICAgaW50NjQgLy8gVGltZXN0YW1wIGF0IHdoaWNoIHRvIGN1
+dCB0aGUgbmV4dCBjaHVuay4KCXNhbXBsZUJ1ZiAgICAgWzRdc2FtcGxlCglw
+ZW5kaW5nQ29tbWl0IGJvb2wgLy8gV2hldGhlciB0aGVyZSBhcmUgc2FtcGxl
+cyB3YWl0aW5nIHRvIGJlIGNvbW1pdHRlZCB0byB0aGlzIHNlcmllcy4KCglh
+cHAgY2h1bmtlbmMuQXBwZW5kZXIgLy8gQ3VycmVudCBhcHBlbmRlciBmb3Ig
+dGhlIGNodW5rLgoKCXR4cyAqdHhSaW5nCn0=
+"></button>
+    </div>
+  </div>
+  <pre><code class="language-golang" data-lang="golang"><table class="rouge-table"><tbody><tr><td class="gutter gl"><pre class="lineno">1704
+1705
+1706
+1707
+1708
+1709
+1710
+1711
+1712
+1713
+1714
+1715
+1716
+1717
+1718
+1719
+1720
+1721
+</pre></td><td class="code"><pre><span class="k">type</span> <span class="n">memSeries</span> <span class="k">struct</span> <span class="p">{</span>
+	<span class="n">sync</span><span class="o">.</span><span class="n">RWMutex</span>
+
+	<span class="n">ref</span>          <span class="kt">uint64</span>
+	<span class="n">lset</span>         <span class="n">labels</span><span class="o">.</span><span class="n">Labels</span>
+	<span class="n">chunks</span>       <span class="p">[]</span><span class="o">*</span><span class="n">memChunk</span>
+	<span class="n">headChunk</span>    <span class="o">*</span><span class="n">memChunk</span>
+	<span class="n">chunkRange</span>   <span class="kt">int64</span>
+	<span class="n">firstChunkID</span> <span class="kt">int</span>
+
+	<span class="n">nextAt</span>        <span class="kt">int64</span> <span class="c">// Timestamp at which to cut the next chunk.</span>
+	<span class="n">sampleBuf</span>     <span class="p">[</span><span class="m">4</span><span class="p">]</span><span class="n">sample</span>
+	<span class="n">pendingCommit</span> <span class="kt">bool</span> <span class="c">// Whether there are samples waiting to be committed to this series.</span>
+
+	<span class="n">app</span> <span class="n">chunkenc</span><span class="o">.</span><span class="n">Appender</span> <span class="c">// Current appender for the chunk.</span>
+
+	<span class="n">txs</span> <span class="o">*</span><span class="n">txRing</span>
+<span class="p">}</span>
+</pre></td></tr></tbody></table></code></pre>
+</figure>
+
+<p>What’s the condition that a new chuck should be created? <code class="highlighter-rouge">nextAt</code> is a field
+that indicates that. If the sample’s timestamp is greater than or equal to
+<code class="highlighter-rouge">nextAt</code>, a new chunk should be created. <code class="highlighter-rouge">nextAt</code> is initialized by <code class="highlighter-rouge">chunkRange</code>
+field (by default it’s 2 hours), but is changed by its increasing velocity when
+it’s 25% full of 120 samples. The number 120 is based on Gorilla white papers,
+which offers near-optimal compression ratio.</p>
+
+<p class="notice--info"><strong>Tip:</strong> For more information about Gorilla white papers, please visit
+<a href="https://www.vldb.org/pvldb/vol8/p1816-teller.pdf">here</a>.</p>
+
+<p>Internally, <code class="highlighter-rouge">memChunk</code> is a wrapper around <code class="highlighter-rouge">chunkenc.XORChunk</code>.
+<code class="highlighter-rouge">chunkenc.XORChunk</code> and its appender implements Gorilla. Each <code class="highlighter-rouge">XORChunk</code> has a
+bits stream, samples are encoded and compressed into that
+stream. When compacting the chunk, it checks if the remainder capacity of the
+bits stream is over a threshold (32). If so, it will decrease the capacity by
+copying it to a new slice of bytes.</p>
+
+<h2 id="head">Head</h2>
+
+<p>Head handles reads and writes of time series data within a time window. It holds
+a <code class="highlighter-rouge">lastSeriesID</code> filed of type <code class="highlighter-rouge">uint64</code>, which starts at 1 for the first series
+and increases by 1 every time.</p>
+
+<h3 id="stripe-series">Stripe series</h3>
+
+<p>Head holds a <code class="highlighter-rouge">series</code> field which is of type <code class="highlighter-rouge">stripeSeries</code>. When creating a
+<code class="highlighter-rouge">stripeSeries</code>, the size by default is 2^14.</p>
+
+<p>The <code class="highlighter-rouge">stripeSeries</code> is like a list of buckets. Each bucket has a
+<code class="highlighter-rouge">map[uint64]*memSeries</code>, <code class="highlighter-rouge">seriesHashmap</code> and a <code class="highlighter-rouge">stripeLock</code>.
+<code class="highlighter-rouge">map[uint64]*memSeries</code> is a map of series ID and series value.  <code class="highlighter-rouge">seriesHashmap</code>
+is a map of <em>hash value of series label set</em> and <em>a slice of <code class="highlighter-rouge">*memSeries</code></em>. Why
+this? Because the hash value of series label set may not be unique, so it needs
+to use a slice to store series values.</p>
+
+<p>So by using such a struct, it not only can quickly find a series by its ID, but
+also by a label set. Given an ID, it finds the bucket by <code class="highlighter-rouge">id &amp; size - 1</code>. Given
+a label set hash, it finds the bucket by <code class="highlighter-rouge">hash &amp; size - 1</code>.</p>
+
+<figure class="highlight">
+  <div class="snippet-header">
+    <div class="snippet-name"><span>tsdb/head.go</span></div>
+    <div class="snippet-actions">
+      <button class="snippet-action-copy" data-snippet="dHlwZSBzdHJpcGVTZXJpZXMgc3RydWN0IHsKCXNpemUgICBpbnQKCXNlcmll
+cyBbXW1hcFt1aW50NjRdKm1lbVNlcmllcwoJaGFzaGVzIFtdc2VyaWVzSGFz
+aG1hcAoJbG9ja3MgIFtdc3RyaXBlTG9jawp9
+"></button>
+    </div>
+  </div>
+  <pre><code class="language-golang" data-lang="golang"><table class="rouge-table"><tbody><tr><td class="gutter gl"><pre class="lineno">1567
+1568
+1569
+1570
+1571
+1572
+</pre></td><td class="code"><pre><span class="k">type</span> <span class="n">stripeSeries</span> <span class="k">struct</span> <span class="p">{</span>
+	<span class="n">size</span>   <span class="kt">int</span>
+	<span class="n">series</span> <span class="p">[]</span><span class="k">map</span><span class="p">[</span><span class="kt">uint64</span><span class="p">]</span><span class="o">*</span><span class="n">memSeries</span>
+	<span class="n">hashes</span> <span class="p">[]</span><span class="n">seriesHashmap</span>
+	<span class="n">locks</span>  <span class="p">[]</span><span class="n">stripeLock</span>
+<span class="p">}</span>
+</pre></td></tr></tbody></table></code></pre>
+</figure>
+
+<h3 id="head-appender">Head appender</h3>
+
+<p>In every scrape, <code class="highlighter-rouge">Head</code> returns a new <code class="highlighter-rouge">headAppender</code> which the scraper uses to
+add samples.</p>
+
+<p>For adding, it has two methods: <code class="highlighter-rouge">Add</code> and <code class="highlighter-rouge">AddFast</code>. <code class="highlighter-rouge">Add</code> first checks if the
+series identified by the passed label set already exists in <code class="highlighter-rouge">stripeSeries</code>. If
+not, it creates one, adds it to <code class="highlighter-rouge">stripeSeries</code> and <code class="highlighter-rouge">postings</code>. For each label,
+it collects possible values for the label name into <code class="highlighter-rouge">values</code>, and adds its name
+and value as keys of a <code class="highlighter-rouge">symbols</code> map. Note that <code class="highlighter-rouge">stripeSeries</code>, <code class="highlighter-rouge">postings</code>,
+<code class="highlighter-rouge">values</code> and <code class="highlighter-rouge">symbols</code> are all fields of the head. Finally, it adds the created
+series to <code class="highlighter-rouge">series</code> field of <code class="highlighter-rouge">headAppender</code> (used when writing WAL) and calls
+<code class="highlighter-rouge">AddFast</code> to do remainder work.</p>
+
+<p>As it name suggests, <code class="highlighter-rouge">AddFast</code> runs faster because it doesn’t need to create a
+series. It should only be called when a series has already been created in the
+head. It finds the created series by ID from the head, and then adds the sample
+and series to <code class="highlighter-rouge">samples</code> slice and <code class="highlighter-rouge">sampleSeries</code> slice respectively (the two
+slices are one-to-one).</p>
+
+<figure class="highlight">
+  <div class="snippet-header">
+    <div class="snippet-name"><span>tsdb/head.go</span></div>
+    <div class="snippet-actions">
+      <button class="snippet-action-copy" data-snippet="dHlwZSBoZWFkQXBwZW5kZXIgc3RydWN0IHsKCWhlYWQgICAgICAgICAqSGVh
+ZAoJbWluVmFsaWRUaW1lIGludDY0IC8vIE5vIHNhbXBsZXMgYmVsb3cgdGhp
+cyB0aW1lc3RhbXAgYXJlIGFsbG93ZWQuCgltaW50LCBtYXh0ICAgaW50NjQK
+CglzZXJpZXMgICAgICAgW11yZWNvcmQuUmVmU2VyaWVzCglzYW1wbGVzICAg
+ICAgW11yZWNvcmQuUmVmU2FtcGxlCglzYW1wbGVTZXJpZXMgW10qbWVtU2Vy
+aWVzCgoJYXBwZW5kSUQsIGNsZWFudXBBcHBlbmRJRHNCZWxvdyB1aW50NjQK
+fQ==
+"></button>
+    </div>
+  </div>
+  <pre><code class="language-golang" data-lang="golang"><table class="rouge-table"><tbody><tr><td class="gutter gl"><pre class="lineno">936
+937
+938
+939
+940
+941
+942
+943
+944
+945
+946
+</pre></td><td class="code"><pre><span class="k">type</span> <span class="n">headAppender</span> <span class="k">struct</span> <span class="p">{</span>
+	<span class="n">head</span>         <span class="o">*</span><span class="n">Head</span>
+	<span class="n">minValidTime</span> <span class="kt">int64</span> <span class="c">// No samples below this timestamp are allowed.</span>
+	<span class="n">mint</span><span class="p">,</span> <span class="n">maxt</span>   <span class="kt">int64</span>
+
+	<span class="n">series</span>       <span class="p">[]</span><span class="n">record</span><span class="o">.</span><span class="n">RefSeries</span>
+	<span class="n">samples</span>      <span class="p">[]</span><span class="n">record</span><span class="o">.</span><span class="n">RefSample</span>
+	<span class="n">sampleSeries</span> <span class="p">[]</span><span class="o">*</span><span class="n">memSeries</span>
+
+	<span class="n">appendID</span><span class="p">,</span> <span class="n">cleanupAppendIDsBelow</span> <span class="kt">uint64</span>
+<span class="p">}</span>
+</pre></td></tr></tbody></table></code></pre>
+</figure>
+
+<p>When all samples for a scrape are added in <code class="highlighter-rouge">headAppender</code>, the scraper calls
+<code class="highlighter-rouge">headAppender.Commit()</code> to complete. It checks if there are newly created series
+(<code class="highlighter-rouge">series</code> is not empty), if so, it writes them to ahead log. Then it checks if
+<code class="highlighter-rouge">samples</code> is empty, if not, it writes them to ahead log. Finally, it iterates
+<code class="highlighter-rouge">samples</code>, add appends each sample to its series. It’s at this time that all
+samples for a scrape are truly added to series.</p>
+
+<h2 id="compact">Compact</h2>
+
+<p>The compactor first checks whether the head is compactable. If yes, it compacts
+head. Finally, it compacts blocks. When the head time range is 1.5 times the
+chunk range, the head will be compacted.</p>
+
+<h3 id="compact-head">Compact head</h3>
+
+<p>For this operation, it mainly calls <code class="highlighter-rouge">Compactor.Write</code>. It allocates a new
+<code class="highlighter-rouge">ULID</code>, and initializes a <code class="highlighter-rouge">BlockMeta</code> with min/max time range and compaction
+information. It then creates a new temporary directory with <code class="highlighter-rouge">&lt;ULID&gt;.tmp</code> as
+name. It populates a block, and writes <code class="highlighter-rouge">BlockMeta</code> to a <code class="highlighter-rouge">meta.json</code> file in the
+block root directory. After that, it creates an empty tombstones file by passing
+in an empty in-memory tombstone reader. Finally, it replaces the temporary
+directory name with <code class="highlighter-rouge">ULID</code>.</p>
+
+<p>The relevant code location is shown in below snippet.</p>
+
+<figure class="highlight">
+  <div class="snippet-header">
+    <div class="snippet-name"><span>tsdb/compact.go</span></div>
+    <div class="snippet-actions">
+      <button class="snippet-action-copy" data-snippet="ZnVuYyAoYyAqTGV2ZWxlZENvbXBhY3Rvcikgd3JpdGUoZGVzdCBzdHJpbmcs
+IG1ldGEgKkJsb2NrTWV0YSwgYmxvY2tzIC4uLkJsb2NrUmVhZGVyKSAoZXJy
+IGVycm9yKSB7Ci4uLg==
+"></button>
+    </div>
+  </div>
+  <pre><code class="language-golang" data-lang="golang"><table class="rouge-table"><tbody><tr><td class="gutter gl"><pre class="lineno">526
+527
+</pre></td><td class="code"><pre><span class="k">func</span> <span class="p">(</span><span class="n">c</span> <span class="o">*</span><span class="n">LeveledCompactor</span><span class="p">)</span> <span class="n">write</span><span class="p">(</span><span class="n">dest</span> <span class="kt">string</span><span class="p">,</span> <span class="n">meta</span> <span class="o">*</span><span class="n">BlockMeta</span><span class="p">,</span> <span class="n">blocks</span> <span class="o">...</span><span class="n">BlockReader</span><span class="p">)</span> <span class="p">(</span><span class="n">err</span> <span class="kt">error</span><span class="p">)</span> <span class="p">{</span>
+<span class="o">...</span>
+</pre></td></tr></tbody></table></code></pre>
+</figure>
+
+<p>Compact data if possible. After successful compaction blocks are reloaded
+which will also trigger blocks to be deleted that fall out of the retention
+window.
+If no blocks are compacted, the retention window state doesn’t change. Thus,
+this is sufficient to reliably delete old data.
+Old blocks are only deleted on reload based on the new block’s parent information.
+See DB.reload documentation for further information.</p>
+
+<h2 id="postings">Postings</h2>
+
+<p><code class="highlighter-rouge">Postings</code> is a struct that stores a map of <em>label name</em> and <em>a map of label
+value and series id pair</em> pair. That’s to say, the key of the top level map is
+the label name from a set of labels, with its value being a map. Furthermore,
+The key of the second level map is the label value from a set of labels, with
+its value being a slice of the series ids. So we can quickly get all series ids
+by a label.</p>
+
+<p>It also provides an empty label which is called <code class="highlighter-rouge">allPostingsKey</code>. When adding a
+new series id for a set of labels, the series id is also added for that empty
+label. So we can quickly get all series ids in one <code class="highlighter-rouge">Postings</code>.</p>
+
+<figure class="highlight">
+  <div class="snippet-header">
+    <div class="snippet-name"><span>tsdb/index/postings.go</span></div>
+    <div class="snippet-actions">
+      <button class="snippet-action-copy" data-snippet="dHlwZSBNZW1Qb3N0aW5ncyBzdHJ1Y3QgewoJbXR4ICAgICBzeW5jLlJXTXV0
+ZXgKCW0gICAgICAgbWFwW3N0cmluZ11tYXBbc3RyaW5nXVtddWludDY0Cglv
+cmRlcmVkIGJvb2wKfQ==
+"></button>
+    </div>
+  </div>
+  <pre><code class="language-golang" data-lang="golang"><table class="rouge-table"><tbody><tr><td class="gutter gl"><pre class="lineno">38
+39
+40
+41
+42
+</pre></td><td class="code"><pre><span class="k">type</span> <span class="n">MemPostings</span> <span class="k">struct</span> <span class="p">{</span>
+	<span class="n">mtx</span>     <span class="n">sync</span><span class="o">.</span><span class="n">RWMutex</span>
+	<span class="n">m</span>       <span class="k">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="k">map</span><span class="p">[</span><span class="kt">string</span><span class="p">][]</span><span class="kt">uint64</span>
+	<span class="n">ordered</span> <span class="kt">bool</span>
+<span class="p">}</span>
+</pre></td></tr></tbody></table></code></pre>
+</figure>
+
+<h2 id="on-disk-layout">On-disk layout</h2>
+
+<p>The directory structure of a Prometheus server’s data directory looks something like this:</p>
+
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>./data
+├ 01BKGV7JBM69T2G1BGBGM6KB12
+│   └ meta.json
+├ 01BKGTZQ1SYQJTR4PB43C8PD98
+│   ├ chunks
+│   │   └ 000001
+│   ├ tombstones
+│   ├ index
+│   └ meta.json
+├ 01BKGTZQ1HHWHV8FBJXW1Y3W0K
+│   └ meta.json
+├ 01BKGV7JC0RY8A6MACW02A2PJD
+│   ├ chunks
+│   │   └ 000001
+│   ├ tombstones
+│   ├ index
+│   └ meta.json
+└ wal
+    ├ 00000002
+    └ checkpoint.000001
+</code></pre></div></div>
+
+<h3 id="chunks">Chunks</h3>
+
+<p>Each chunks file is composed of the following:</p>
+
+<ol>
+  <li><strong>A header section</strong> which contains a magic number, a format version, and
+some padding bytes.</li>
+  <li><strong>Multiple chunk sections</strong> that each of them contains a chunk of encoded
+timestamp/value pairs.</li>
+</ol>
+
+<p>Chunks are segmented into segment files when its file size is over 512MiB.  A
+chunk in a file can be referenced from the index file by uint64. The lower 4
+bytes of the reference value is the chunk’s offset in the file, and the higher 4
+bytes are the segment sequence number.</p>
+
+<p class="notice--info"><strong>Tip:</strong> For more information about the chunks file format, please visit
+<a href="https://github.com/prometheus/prometheus/blob/v2.18.1/tsdb/docs/format/chunks.md">here</a>.</p>
+
+<h3 id="index">Index</h3>
+
+<p>The index file format is composed of following sections:</p>
+
+<ol>
+  <li><strong>A header section</strong> which contains a magic number and format version.</li>
+  <li><strong>A symbol table section</strong> which holds a sorted list of deduplicated strings to reduce
+the total index size, and are referenced by subsequent sections.</li>
+  <li><strong>A series section</strong> which contains a sequence of series. Each of them
+contains its label set and chunks. The chunk contains time range information
+and chunk file’s offset from which the chunk data begins.</li>
+  <li><strong>Multiple label index sections</strong> which are no longer used.</li>
+  <li><strong>Multiple postings sections</strong> that each of them contains a list of series
+which are associated with a given label name and value.</li>
+  <li><strong>A label index table section</strong> which is no longer used.</li>
+  <li><strong>A postings table section</strong> which contains a sequence of postings offset
+entries. Each entry contains a label pair and an offset of the index file
+from which the postings (that contains a sequence of series) begins.</li>
+  <li><strong>A TOC (table of contents) section</strong> that contains the offsets to the
+beginning of the above sections.</li>
+</ol>
+
+<p class="notice--info"><strong>Tip:</strong> For more information about the index file format, please visit
+<a href="https://github.com/prometheus/prometheus/blob/v2.18.1/tsdb/docs/format/index.md">here</a>.</p>
+
+<h3 id="tombstones">Tombstones</h3>
+
+<p>The tombstones file is composed of the following:</p>
+
+<ol>
+  <li><strong>A header section</strong> which contains a magic number and format version.</li>
+  <li><strong>A tombstones section</strong> that contains a sequence of tombstone. Each
+tombstone contains a ref and a time range.</li>
+</ol>
+
+<p class="notice--info"><strong>Tip:</strong> For more information about the tombstones file format, please visit
+<a href="https://github.com/prometheus/prometheus/blob/v2.18.1/tsdb/docs/format/tombstones.md">here</a>.</p>
+
+        
+      </section>
+
+      <footer class="page__meta">
+        
+        
+
+
+        
+          <p class="page__date"><strong><i class="fas fa-fw fa-calendar-alt" aria-hidden="true"></i> Updated:</strong> <time datetime="2020-05-24T20:15:00+08:00">May 24, 2020</time></p>
+        
+      </footer>
+
+      
+
+      
+  <nav class="pagination">
+    
+      <a href="/prometheus-scrape-internals.html" class="pagination--pager" title="Prometheus scrape internals
+">Previous</a>
+    
+    
+      <a href="#" class="pagination--pager disabled">Next</a>
+    
+  </nav>
+
+    </div>
+
+    
+  </article>
+
+  
+  
+</div>
+
+    </div>
+
+    
+
+    <div id="footer" class="page__footer">
+      <footer>
+        <!-- start custom footer snippets -->
+
+<!-- end custom footer snippets -->
+        <div class="page__footer-follow">
+  <ul class="social-icons">
+    
+
+    
+
+    <li><a href="/feed.xml"><i class="fas fa-fw fa-rss-square" aria-hidden="true"></i> Feed</a></li>
+  </ul>
+</div>
+
+<div class="page__footer-copyright">&copy; 2020 Mingxiang's blog. Powered by <a href="https://jekyllrb.com" rel="nofollow">Jekyll</a> &amp; <a href="https://mademistakes.com/work/minimal-mistakes-jekyll-theme/" rel="nofollow">Minimal Mistakes</a>.</div>
+
+      </footer>
+    </div>
+
+    
+  
+    <script src="/assets/scripts/snippet.js"></script>
+  
+
+
+
+
+
+
+
+    
+
+
+
+
+
+
+
+  </body>
+</html>

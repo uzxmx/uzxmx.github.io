@@ -1,0 +1,1199 @@
+<?xml version="1.0" encoding="utf-8"?><feed xmlns="http://www.w3.org/2005/Atom" ><generator uri="https://jekyllrb.com/" version="3.8.5">Jekyll</generator><link href="https://uzxmx.github.io/feed.xml" rel="self" type="application/atom+xml" /><link href="https://uzxmx.github.io/" rel="alternate" type="text/html" /><updated>2020-05-29T18:12:22+08:00</updated><id>https://uzxmx.github.io/feed.xml</id><title type="html">Mingxiang’s blog</title><subtitle>A blog that contains articles about programming languages, open source frameworks, and some technical how-to and tricks.</subtitle><entry><title type="html">Prometheus TSDB internals</title><link href="https://uzxmx.github.io/prometheus-tsdb-internals.html" rel="alternate" type="text/html" title="Prometheus TSDB internals" /><published>2020-05-24T20:15:00+08:00</published><updated>2020-05-24T20:15:00+08:00</updated><id>https://uzxmx.github.io/prometheus-tsdb-internals</id><content type="html" xml:base="https://uzxmx.github.io/prometheus-tsdb-internals.html">&lt;p&gt;Prometheus has local and remote storage. At the beginning, it creates a local
+storage, a remote storage, and a fanout storage. A fanout storage is like a
+wrapper storage that wraps a primary storage and multiple secondary storages,
+which proxies reads and writes through to the underlying.&lt;/p&gt;
+
+&lt;p&gt;Internally, Prometheus uses a type of struct called &lt;code class=&quot;highlighter-rouge&quot;&gt;Head&lt;/code&gt; to maintain a series
+of data, and to persist the in-memory data to the disk.&lt;/p&gt;
+
+&lt;p&gt;When opening a local db by &lt;code class=&quot;highlighter-rouge&quot;&gt;tsdb.Open()&lt;/code&gt;, it loads data from the write ahead log
+and prepares the head for writes. It then starts a goroutine to compact two-hour
+blocks per minute (with exponential backoff on error).&lt;/p&gt;
+
+&lt;h2 id=&quot;memory-series&quot;&gt;Memory series&lt;/h2&gt;
+
+&lt;p&gt;In Prometheus, a series is a struct of type &lt;code class=&quot;highlighter-rouge&quot;&gt;memSeries&lt;/code&gt;, which contains an ID
+(also called &lt;code class=&quot;highlighter-rouge&quot;&gt;ref&lt;/code&gt;), a label set, and other fields.&lt;/p&gt;
+
+&lt;p&gt;A series holds a slice of memory chunks that each of them is of type &lt;code class=&quot;highlighter-rouge&quot;&gt;memChunk&lt;/code&gt;,
+which is used to store timestamp and value pairs (samples). Samples are appended
+(encoded) into a memory chunk. When some condition matches, a chunk is marked as
+complete (it will be compacted) and a new chunk is created (analogous to &lt;code class=&quot;highlighter-rouge&quot;&gt;cut&lt;/code&gt;).
+The &lt;code class=&quot;highlighter-rouge&quot;&gt;headChunk&lt;/code&gt; field always points to the current chunk to append.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;
+  &lt;div class=&quot;snippet-header&quot;&gt;
+    &lt;div class=&quot;snippet-name&quot;&gt;&lt;span&gt;tsdb/head.go&lt;/span&gt;&lt;/div&gt;
+    &lt;div class=&quot;snippet-actions&quot;&gt;
+      &lt;button class=&quot;snippet-action-copy&quot; data-snippet=&quot;dHlwZSBtZW1TZXJpZXMgc3RydWN0IHsKCXN5bmMuUldNdXRleAoKCXJlZiAg
+ICAgICAgICB1aW50NjQKCWxzZXQgICAgICAgICBsYWJlbHMuTGFiZWxzCglj
+aHVua3MgICAgICAgW10qbWVtQ2h1bmsKCWhlYWRDaHVuayAgICAqbWVtQ2h1
+bmsKCWNodW5rUmFuZ2UgICBpbnQ2NAoJZmlyc3RDaHVua0lEIGludAoKCW5l
+eHRBdCAgICAgICAgaW50NjQgLy8gVGltZXN0YW1wIGF0IHdoaWNoIHRvIGN1
+dCB0aGUgbmV4dCBjaHVuay4KCXNhbXBsZUJ1ZiAgICAgWzRdc2FtcGxlCglw
+ZW5kaW5nQ29tbWl0IGJvb2wgLy8gV2hldGhlciB0aGVyZSBhcmUgc2FtcGxl
+cyB3YWl0aW5nIHRvIGJlIGNvbW1pdHRlZCB0byB0aGlzIHNlcmllcy4KCglh
+cHAgY2h1bmtlbmMuQXBwZW5kZXIgLy8gQ3VycmVudCBhcHBlbmRlciBmb3Ig
+dGhlIGNodW5rLgoKCXR4cyAqdHhSaW5nCn0=
+&quot;&gt;&lt;/button&gt;
+    &lt;/div&gt;
+  &lt;/div&gt;
+  &lt;pre&gt;&lt;code class=&quot;language-golang&quot; data-lang=&quot;golang&quot;&gt;&lt;table class=&quot;rouge-table&quot;&gt;&lt;tbody&gt;&lt;tr&gt;&lt;td class=&quot;gutter gl&quot;&gt;&lt;pre class=&quot;lineno&quot;&gt;1704
+1705
+1706
+1707
+1708
+1709
+1710
+1711
+1712
+1713
+1714
+1715
+1716
+1717
+1718
+1719
+1720
+1721
+&lt;/pre&gt;&lt;/td&gt;&lt;td class=&quot;code&quot;&gt;&lt;pre&gt;&lt;span class=&quot;k&quot;&gt;type&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;memSeries&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;struct&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;sync&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;RWMutex&lt;/span&gt;
+
+	&lt;span class=&quot;n&quot;&gt;ref&lt;/span&gt;          &lt;span class=&quot;kt&quot;&gt;uint64&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;lset&lt;/span&gt;         &lt;span class=&quot;n&quot;&gt;labels&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;Labels&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;chunks&lt;/span&gt;       &lt;span class=&quot;p&quot;&gt;[]&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;memChunk&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;headChunk&lt;/span&gt;    &lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;memChunk&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;chunkRange&lt;/span&gt;   &lt;span class=&quot;kt&quot;&gt;int64&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;firstChunkID&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt;
+
+	&lt;span class=&quot;n&quot;&gt;nextAt&lt;/span&gt;        &lt;span class=&quot;kt&quot;&gt;int64&lt;/span&gt; &lt;span class=&quot;c&quot;&gt;// Timestamp at which to cut the next chunk.&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;sampleBuf&lt;/span&gt;     &lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;m&quot;&gt;4&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;sample&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;pendingCommit&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;bool&lt;/span&gt; &lt;span class=&quot;c&quot;&gt;// Whether there are samples waiting to be committed to this series.&lt;/span&gt;
+
+	&lt;span class=&quot;n&quot;&gt;app&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;chunkenc&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;Appender&lt;/span&gt; &lt;span class=&quot;c&quot;&gt;// Current appender for the chunk.&lt;/span&gt;
+
+	&lt;span class=&quot;n&quot;&gt;txs&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;txRing&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+&lt;/pre&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/tbody&gt;&lt;/table&gt;&lt;/code&gt;&lt;/pre&gt;
+&lt;/figure&gt;
+
+&lt;p&gt;What’s the condition that a new chuck should be created? &lt;code class=&quot;highlighter-rouge&quot;&gt;nextAt&lt;/code&gt; is a field
+that indicates that. If the sample’s timestamp is greater than or equal to
+&lt;code class=&quot;highlighter-rouge&quot;&gt;nextAt&lt;/code&gt;, a new chunk should be created. &lt;code class=&quot;highlighter-rouge&quot;&gt;nextAt&lt;/code&gt; is initialized by &lt;code class=&quot;highlighter-rouge&quot;&gt;chunkRange&lt;/code&gt;
+field (by default it’s 2 hours), but is changed by its increasing velocity when
+it’s 25% full of 120 samples. The number 120 is based on Gorilla white papers,
+which offers near-optimal compression ratio.&lt;/p&gt;
+
+&lt;p class=&quot;notice--info&quot;&gt;&lt;strong&gt;Tip:&lt;/strong&gt; For more information about Gorilla white papers, please visit
+&lt;a href=&quot;https://www.vldb.org/pvldb/vol8/p1816-teller.pdf&quot;&gt;here&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;Internally, &lt;code class=&quot;highlighter-rouge&quot;&gt;memChunk&lt;/code&gt; is a wrapper around &lt;code class=&quot;highlighter-rouge&quot;&gt;chunkenc.XORChunk&lt;/code&gt;.
+&lt;code class=&quot;highlighter-rouge&quot;&gt;chunkenc.XORChunk&lt;/code&gt; and its appender implements Gorilla. Each &lt;code class=&quot;highlighter-rouge&quot;&gt;XORChunk&lt;/code&gt; has a
+bits stream, samples are encoded and compressed into that
+stream. When compacting the chunk, it checks if the remainder capacity of the
+bits stream is over a threshold (32). If so, it will decrease the capacity by
+copying it to a new slice of bytes.&lt;/p&gt;
+
+&lt;h2 id=&quot;head&quot;&gt;Head&lt;/h2&gt;
+
+&lt;p&gt;Head handles reads and writes of time series data within a time window. It holds
+a &lt;code class=&quot;highlighter-rouge&quot;&gt;lastSeriesID&lt;/code&gt; filed of type &lt;code class=&quot;highlighter-rouge&quot;&gt;uint64&lt;/code&gt;, which starts at 1 for the first series
+and increases by 1 every time.&lt;/p&gt;
+
+&lt;h3 id=&quot;stripe-series&quot;&gt;Stripe series&lt;/h3&gt;
+
+&lt;p&gt;Head holds a &lt;code class=&quot;highlighter-rouge&quot;&gt;series&lt;/code&gt; field which is of type &lt;code class=&quot;highlighter-rouge&quot;&gt;stripeSeries&lt;/code&gt;. When creating a
+&lt;code class=&quot;highlighter-rouge&quot;&gt;stripeSeries&lt;/code&gt;, the size by default is 2^14.&lt;/p&gt;
+
+&lt;p&gt;The &lt;code class=&quot;highlighter-rouge&quot;&gt;stripeSeries&lt;/code&gt; is like a list of buckets. Each bucket has a
+&lt;code class=&quot;highlighter-rouge&quot;&gt;map[uint64]*memSeries&lt;/code&gt;, &lt;code class=&quot;highlighter-rouge&quot;&gt;seriesHashmap&lt;/code&gt; and a &lt;code class=&quot;highlighter-rouge&quot;&gt;stripeLock&lt;/code&gt;.
+&lt;code class=&quot;highlighter-rouge&quot;&gt;map[uint64]*memSeries&lt;/code&gt; is a map of series ID and series value.  &lt;code class=&quot;highlighter-rouge&quot;&gt;seriesHashmap&lt;/code&gt;
+is a map of &lt;em&gt;hash value of series label set&lt;/em&gt; and &lt;em&gt;a slice of &lt;code class=&quot;highlighter-rouge&quot;&gt;*memSeries&lt;/code&gt;&lt;/em&gt;. Why
+this? Because the hash value of series label set may not be unique, so it needs
+to use a slice to store series values.&lt;/p&gt;
+
+&lt;p&gt;So by using such a struct, it not only can quickly find a series by its ID, but
+also by a label set. Given an ID, it finds the bucket by &lt;code class=&quot;highlighter-rouge&quot;&gt;id &amp;amp; size - 1&lt;/code&gt;. Given
+a label set hash, it finds the bucket by &lt;code class=&quot;highlighter-rouge&quot;&gt;hash &amp;amp; size - 1&lt;/code&gt;.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;
+  &lt;div class=&quot;snippet-header&quot;&gt;
+    &lt;div class=&quot;snippet-name&quot;&gt;&lt;span&gt;tsdb/head.go&lt;/span&gt;&lt;/div&gt;
+    &lt;div class=&quot;snippet-actions&quot;&gt;
+      &lt;button class=&quot;snippet-action-copy&quot; data-snippet=&quot;dHlwZSBzdHJpcGVTZXJpZXMgc3RydWN0IHsKCXNpemUgICBpbnQKCXNlcmll
+cyBbXW1hcFt1aW50NjRdKm1lbVNlcmllcwoJaGFzaGVzIFtdc2VyaWVzSGFz
+aG1hcAoJbG9ja3MgIFtdc3RyaXBlTG9jawp9
+&quot;&gt;&lt;/button&gt;
+    &lt;/div&gt;
+  &lt;/div&gt;
+  &lt;pre&gt;&lt;code class=&quot;language-golang&quot; data-lang=&quot;golang&quot;&gt;&lt;table class=&quot;rouge-table&quot;&gt;&lt;tbody&gt;&lt;tr&gt;&lt;td class=&quot;gutter gl&quot;&gt;&lt;pre class=&quot;lineno&quot;&gt;1567
+1568
+1569
+1570
+1571
+1572
+&lt;/pre&gt;&lt;/td&gt;&lt;td class=&quot;code&quot;&gt;&lt;pre&gt;&lt;span class=&quot;k&quot;&gt;type&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;stripeSeries&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;struct&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;size&lt;/span&gt;   &lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;series&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;[]&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;map&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;uint64&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;memSeries&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;hashes&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;[]&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;seriesHashmap&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;locks&lt;/span&gt;  &lt;span class=&quot;p&quot;&gt;[]&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;stripeLock&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+&lt;/pre&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/tbody&gt;&lt;/table&gt;&lt;/code&gt;&lt;/pre&gt;
+&lt;/figure&gt;
+
+&lt;h3 id=&quot;head-appender&quot;&gt;Head appender&lt;/h3&gt;
+
+&lt;p&gt;In every scrape, &lt;code class=&quot;highlighter-rouge&quot;&gt;Head&lt;/code&gt; returns a new &lt;code class=&quot;highlighter-rouge&quot;&gt;headAppender&lt;/code&gt; which the scraper uses to
+add samples.&lt;/p&gt;
+
+&lt;p&gt;For adding, it has two methods: &lt;code class=&quot;highlighter-rouge&quot;&gt;Add&lt;/code&gt; and &lt;code class=&quot;highlighter-rouge&quot;&gt;AddFast&lt;/code&gt;. &lt;code class=&quot;highlighter-rouge&quot;&gt;Add&lt;/code&gt; first checks if the
+series identified by the passed label set already exists in &lt;code class=&quot;highlighter-rouge&quot;&gt;stripeSeries&lt;/code&gt;. If
+not, it creates one, adds it to &lt;code class=&quot;highlighter-rouge&quot;&gt;stripeSeries&lt;/code&gt; and &lt;code class=&quot;highlighter-rouge&quot;&gt;postings&lt;/code&gt;. For each label,
+it collects possible values for the label name into &lt;code class=&quot;highlighter-rouge&quot;&gt;values&lt;/code&gt;, and adds its name
+and value as keys of a &lt;code class=&quot;highlighter-rouge&quot;&gt;symbols&lt;/code&gt; map. Note that &lt;code class=&quot;highlighter-rouge&quot;&gt;stripeSeries&lt;/code&gt;, &lt;code class=&quot;highlighter-rouge&quot;&gt;postings&lt;/code&gt;,
+&lt;code class=&quot;highlighter-rouge&quot;&gt;values&lt;/code&gt; and &lt;code class=&quot;highlighter-rouge&quot;&gt;symbols&lt;/code&gt; are all fields of the head. Finally, it adds the created
+series to &lt;code class=&quot;highlighter-rouge&quot;&gt;series&lt;/code&gt; field of &lt;code class=&quot;highlighter-rouge&quot;&gt;headAppender&lt;/code&gt; (used when writing WAL) and calls
+&lt;code class=&quot;highlighter-rouge&quot;&gt;AddFast&lt;/code&gt; to do remainder work.&lt;/p&gt;
+
+&lt;p&gt;As it name suggests, &lt;code class=&quot;highlighter-rouge&quot;&gt;AddFast&lt;/code&gt; runs faster because it doesn’t need to create a
+series. It should only be called when a series has already been created in the
+head. It finds the created series by ID from the head, and then adds the sample
+and series to &lt;code class=&quot;highlighter-rouge&quot;&gt;samples&lt;/code&gt; slice and &lt;code class=&quot;highlighter-rouge&quot;&gt;sampleSeries&lt;/code&gt; slice respectively (the two
+slices are one-to-one).&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;
+  &lt;div class=&quot;snippet-header&quot;&gt;
+    &lt;div class=&quot;snippet-name&quot;&gt;&lt;span&gt;tsdb/head.go&lt;/span&gt;&lt;/div&gt;
+    &lt;div class=&quot;snippet-actions&quot;&gt;
+      &lt;button class=&quot;snippet-action-copy&quot; data-snippet=&quot;dHlwZSBoZWFkQXBwZW5kZXIgc3RydWN0IHsKCWhlYWQgICAgICAgICAqSGVh
+ZAoJbWluVmFsaWRUaW1lIGludDY0IC8vIE5vIHNhbXBsZXMgYmVsb3cgdGhp
+cyB0aW1lc3RhbXAgYXJlIGFsbG93ZWQuCgltaW50LCBtYXh0ICAgaW50NjQK
+CglzZXJpZXMgICAgICAgW11yZWNvcmQuUmVmU2VyaWVzCglzYW1wbGVzICAg
+ICAgW11yZWNvcmQuUmVmU2FtcGxlCglzYW1wbGVTZXJpZXMgW10qbWVtU2Vy
+aWVzCgoJYXBwZW5kSUQsIGNsZWFudXBBcHBlbmRJRHNCZWxvdyB1aW50NjQK
+fQ==
+&quot;&gt;&lt;/button&gt;
+    &lt;/div&gt;
+  &lt;/div&gt;
+  &lt;pre&gt;&lt;code class=&quot;language-golang&quot; data-lang=&quot;golang&quot;&gt;&lt;table class=&quot;rouge-table&quot;&gt;&lt;tbody&gt;&lt;tr&gt;&lt;td class=&quot;gutter gl&quot;&gt;&lt;pre class=&quot;lineno&quot;&gt;936
+937
+938
+939
+940
+941
+942
+943
+944
+945
+946
+&lt;/pre&gt;&lt;/td&gt;&lt;td class=&quot;code&quot;&gt;&lt;pre&gt;&lt;span class=&quot;k&quot;&gt;type&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;headAppender&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;struct&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;head&lt;/span&gt;         &lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;Head&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;minValidTime&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;int64&lt;/span&gt; &lt;span class=&quot;c&quot;&gt;// No samples below this timestamp are allowed.&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;mint&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;maxt&lt;/span&gt;   &lt;span class=&quot;kt&quot;&gt;int64&lt;/span&gt;
+
+	&lt;span class=&quot;n&quot;&gt;series&lt;/span&gt;       &lt;span class=&quot;p&quot;&gt;[]&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;record&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;RefSeries&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;samples&lt;/span&gt;      &lt;span class=&quot;p&quot;&gt;[]&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;record&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;RefSample&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;sampleSeries&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;[]&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;memSeries&lt;/span&gt;
+
+	&lt;span class=&quot;n&quot;&gt;appendID&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;cleanupAppendIDsBelow&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;uint64&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+&lt;/pre&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/tbody&gt;&lt;/table&gt;&lt;/code&gt;&lt;/pre&gt;
+&lt;/figure&gt;
+
+&lt;p&gt;When all samples for a scrape are added in &lt;code class=&quot;highlighter-rouge&quot;&gt;headAppender&lt;/code&gt;, the scraper calls
+&lt;code class=&quot;highlighter-rouge&quot;&gt;headAppender.Commit()&lt;/code&gt; to complete. It checks if there are newly created series
+(&lt;code class=&quot;highlighter-rouge&quot;&gt;series&lt;/code&gt; is not empty), if so, it writes them to ahead log. Then it checks if
+&lt;code class=&quot;highlighter-rouge&quot;&gt;samples&lt;/code&gt; is empty, if not, it writes them to ahead log. Finally, it iterates
+&lt;code class=&quot;highlighter-rouge&quot;&gt;samples&lt;/code&gt;, add appends each sample to its series. It’s at this time that all
+samples for a scrape are truly added to series.&lt;/p&gt;
+
+&lt;h2 id=&quot;compact&quot;&gt;Compact&lt;/h2&gt;
+
+&lt;p&gt;The compactor first checks whether the head is compactable. If yes, it compacts
+head. Finally, it compacts blocks. When the head time range is 1.5 times the
+chunk range, the head will be compacted.&lt;/p&gt;
+
+&lt;h3 id=&quot;compact-head&quot;&gt;Compact head&lt;/h3&gt;
+
+&lt;p&gt;For this operation, it mainly calls &lt;code class=&quot;highlighter-rouge&quot;&gt;Compactor.Write&lt;/code&gt;. It allocates a new
+&lt;code class=&quot;highlighter-rouge&quot;&gt;ULID&lt;/code&gt;, and initializes a &lt;code class=&quot;highlighter-rouge&quot;&gt;BlockMeta&lt;/code&gt; with min/max time range and compaction
+information. It then creates a new temporary directory with &lt;code class=&quot;highlighter-rouge&quot;&gt;&amp;lt;ULID&amp;gt;.tmp&lt;/code&gt; as
+name. It populates a block, and writes &lt;code class=&quot;highlighter-rouge&quot;&gt;BlockMeta&lt;/code&gt; to a &lt;code class=&quot;highlighter-rouge&quot;&gt;meta.json&lt;/code&gt; file in the
+block root directory. After that, it creates an empty tombstones file by passing
+in an empty in-memory tombstone reader. Finally, it replaces the temporary
+directory name with &lt;code class=&quot;highlighter-rouge&quot;&gt;ULID&lt;/code&gt;.&lt;/p&gt;
+
+&lt;p&gt;The relevant code location is shown in below snippet.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;
+  &lt;div class=&quot;snippet-header&quot;&gt;
+    &lt;div class=&quot;snippet-name&quot;&gt;&lt;span&gt;tsdb/compact.go&lt;/span&gt;&lt;/div&gt;
+    &lt;div class=&quot;snippet-actions&quot;&gt;
+      &lt;button class=&quot;snippet-action-copy&quot; data-snippet=&quot;ZnVuYyAoYyAqTGV2ZWxlZENvbXBhY3Rvcikgd3JpdGUoZGVzdCBzdHJpbmcs
+IG1ldGEgKkJsb2NrTWV0YSwgYmxvY2tzIC4uLkJsb2NrUmVhZGVyKSAoZXJy
+IGVycm9yKSB7Ci4uLg==
+&quot;&gt;&lt;/button&gt;
+    &lt;/div&gt;
+  &lt;/div&gt;
+  &lt;pre&gt;&lt;code class=&quot;language-golang&quot; data-lang=&quot;golang&quot;&gt;&lt;table class=&quot;rouge-table&quot;&gt;&lt;tbody&gt;&lt;tr&gt;&lt;td class=&quot;gutter gl&quot;&gt;&lt;pre class=&quot;lineno&quot;&gt;526
+527
+&lt;/pre&gt;&lt;/td&gt;&lt;td class=&quot;code&quot;&gt;&lt;pre&gt;&lt;span class=&quot;k&quot;&gt;func&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;c&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;LeveledCompactor&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;write&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;dest&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;string&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;meta&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;BlockMeta&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;blocks&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;...&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;BlockReader&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;err&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;error&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+&lt;span class=&quot;o&quot;&gt;...&lt;/span&gt;
+&lt;/pre&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/tbody&gt;&lt;/table&gt;&lt;/code&gt;&lt;/pre&gt;
+&lt;/figure&gt;
+
+&lt;p&gt;Compact data if possible. After successful compaction blocks are reloaded
+which will also trigger blocks to be deleted that fall out of the retention
+window.
+If no blocks are compacted, the retention window state doesn’t change. Thus,
+this is sufficient to reliably delete old data.
+Old blocks are only deleted on reload based on the new block’s parent information.
+See DB.reload documentation for further information.&lt;/p&gt;
+
+&lt;h2 id=&quot;postings&quot;&gt;Postings&lt;/h2&gt;
+
+&lt;p&gt;&lt;code class=&quot;highlighter-rouge&quot;&gt;Postings&lt;/code&gt; is a struct that stores a map of &lt;em&gt;label name&lt;/em&gt; and &lt;em&gt;a map of label
+value and series id pair&lt;/em&gt; pair. That’s to say, the key of the top level map is
+the label name from a set of labels, with its value being a map. Furthermore,
+The key of the second level map is the label value from a set of labels, with
+its value being a slice of the series ids. So we can quickly get all series ids
+by a label.&lt;/p&gt;
+
+&lt;p&gt;It also provides an empty label which is called &lt;code class=&quot;highlighter-rouge&quot;&gt;allPostingsKey&lt;/code&gt;. When adding a
+new series id for a set of labels, the series id is also added for that empty
+label. So we can quickly get all series ids in one &lt;code class=&quot;highlighter-rouge&quot;&gt;Postings&lt;/code&gt;.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;
+  &lt;div class=&quot;snippet-header&quot;&gt;
+    &lt;div class=&quot;snippet-name&quot;&gt;&lt;span&gt;tsdb/index/postings.go&lt;/span&gt;&lt;/div&gt;
+    &lt;div class=&quot;snippet-actions&quot;&gt;
+      &lt;button class=&quot;snippet-action-copy&quot; data-snippet=&quot;dHlwZSBNZW1Qb3N0aW5ncyBzdHJ1Y3QgewoJbXR4ICAgICBzeW5jLlJXTXV0
+ZXgKCW0gICAgICAgbWFwW3N0cmluZ11tYXBbc3RyaW5nXVtddWludDY0Cglv
+cmRlcmVkIGJvb2wKfQ==
+&quot;&gt;&lt;/button&gt;
+    &lt;/div&gt;
+  &lt;/div&gt;
+  &lt;pre&gt;&lt;code class=&quot;language-golang&quot; data-lang=&quot;golang&quot;&gt;&lt;table class=&quot;rouge-table&quot;&gt;&lt;tbody&gt;&lt;tr&gt;&lt;td class=&quot;gutter gl&quot;&gt;&lt;pre class=&quot;lineno&quot;&gt;38
+39
+40
+41
+42
+&lt;/pre&gt;&lt;/td&gt;&lt;td class=&quot;code&quot;&gt;&lt;pre&gt;&lt;span class=&quot;k&quot;&gt;type&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;MemPostings&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;struct&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;mtx&lt;/span&gt;     &lt;span class=&quot;n&quot;&gt;sync&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;RWMutex&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;m&lt;/span&gt;       &lt;span class=&quot;k&quot;&gt;map&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;string&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;map&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;string&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;][]&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;uint64&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;ordered&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;bool&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+&lt;/pre&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/tbody&gt;&lt;/table&gt;&lt;/code&gt;&lt;/pre&gt;
+&lt;/figure&gt;
+
+&lt;h2 id=&quot;on-disk-layout&quot;&gt;On-disk layout&lt;/h2&gt;
+
+&lt;p&gt;The directory structure of a Prometheus server’s data directory looks something like this:&lt;/p&gt;
+
+&lt;div class=&quot;highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;./data
+├ 01BKGV7JBM69T2G1BGBGM6KB12
+│   └ meta.json
+├ 01BKGTZQ1SYQJTR4PB43C8PD98
+│   ├ chunks
+│   │   └ 000001
+│   ├ tombstones
+│   ├ index
+│   └ meta.json
+├ 01BKGTZQ1HHWHV8FBJXW1Y3W0K
+│   └ meta.json
+├ 01BKGV7JC0RY8A6MACW02A2PJD
+│   ├ chunks
+│   │   └ 000001
+│   ├ tombstones
+│   ├ index
+│   └ meta.json
+└ wal
+    ├ 00000002
+    └ checkpoint.000001
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;h3 id=&quot;chunks&quot;&gt;Chunks&lt;/h3&gt;
+
+&lt;p&gt;Each chunks file is composed of the following:&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;&lt;strong&gt;A header section&lt;/strong&gt; which contains a magic number, a format version, and
+some padding bytes.&lt;/li&gt;
+  &lt;li&gt;&lt;strong&gt;Multiple chunk sections&lt;/strong&gt; that each of them contains a chunk of encoded
+timestamp/value pairs.&lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;Chunks are segmented into segment files when its file size is over 512MiB.  A
+chunk in a file can be referenced from the index file by uint64. The lower 4
+bytes of the reference value is the chunk’s offset in the file, and the higher 4
+bytes are the segment sequence number.&lt;/p&gt;
+
+&lt;p class=&quot;notice--info&quot;&gt;&lt;strong&gt;Tip:&lt;/strong&gt; For more information about the chunks file format, please visit
+&lt;a href=&quot;https://github.com/prometheus/prometheus/blob/v2.18.1/tsdb/docs/format/chunks.md&quot;&gt;here&lt;/a&gt;.&lt;/p&gt;
+
+&lt;h3 id=&quot;index&quot;&gt;Index&lt;/h3&gt;
+
+&lt;p&gt;The index file format is composed of following sections:&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;&lt;strong&gt;A header section&lt;/strong&gt; which contains a magic number and format version.&lt;/li&gt;
+  &lt;li&gt;&lt;strong&gt;A symbol table section&lt;/strong&gt; which holds a sorted list of deduplicated strings to reduce
+the total index size, and are referenced by subsequent sections.&lt;/li&gt;
+  &lt;li&gt;&lt;strong&gt;A series section&lt;/strong&gt; which contains a sequence of series. Each of them
+contains its label set and chunks. The chunk contains time range information
+and chunk file’s offset from which the chunk data begins.&lt;/li&gt;
+  &lt;li&gt;&lt;strong&gt;Multiple label index sections&lt;/strong&gt; which are no longer used.&lt;/li&gt;
+  &lt;li&gt;&lt;strong&gt;Multiple postings sections&lt;/strong&gt; that each of them contains a list of series
+which are associated with a given label name and value.&lt;/li&gt;
+  &lt;li&gt;&lt;strong&gt;A label index table section&lt;/strong&gt; which is no longer used.&lt;/li&gt;
+  &lt;li&gt;&lt;strong&gt;A postings table section&lt;/strong&gt; which contains a sequence of postings offset
+entries. Each entry contains a label pair and an offset of the index file
+from which the postings (that contains a sequence of series) begins.&lt;/li&gt;
+  &lt;li&gt;&lt;strong&gt;A TOC (table of contents) section&lt;/strong&gt; that contains the offsets to the
+beginning of the above sections.&lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p class=&quot;notice--info&quot;&gt;&lt;strong&gt;Tip:&lt;/strong&gt; For more information about the index file format, please visit
+&lt;a href=&quot;https://github.com/prometheus/prometheus/blob/v2.18.1/tsdb/docs/format/index.md&quot;&gt;here&lt;/a&gt;.&lt;/p&gt;
+
+&lt;h3 id=&quot;tombstones&quot;&gt;Tombstones&lt;/h3&gt;
+
+&lt;p&gt;The tombstones file is composed of the following:&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;&lt;strong&gt;A header section&lt;/strong&gt; which contains a magic number and format version.&lt;/li&gt;
+  &lt;li&gt;&lt;strong&gt;A tombstones section&lt;/strong&gt; that contains a sequence of tombstone. Each
+tombstone contains a ref and a time range.&lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p class=&quot;notice--info&quot;&gt;&lt;strong&gt;Tip:&lt;/strong&gt; For more information about the tombstones file format, please visit
+&lt;a href=&quot;https://github.com/prometheus/prometheus/blob/v2.18.1/tsdb/docs/format/tombstones.md&quot;&gt;here&lt;/a&gt;.&lt;/p&gt;</content><author><name></name></author><summary type="html">Prometheus has local and remote storage. At the beginning, it creates a local storage, a remote storage, and a fanout storage. A fanout storage is like a wrapper storage that wraps a primary storage and multiple secondary storages, which proxies reads and writes through to the underlying.</summary></entry><entry><title type="html">Prometheus scrape internals</title><link href="https://uzxmx.github.io/prometheus-scrape-internals.html" rel="alternate" type="text/html" title="Prometheus scrape internals" /><published>2020-05-24T16:17:00+08:00</published><updated>2020-05-24T16:17:00+08:00</updated><id>https://uzxmx.github.io/prometheus-scrape-internals</id><content type="html" xml:base="https://uzxmx.github.io/prometheus-scrape-internals.html">&lt;p&gt;Scrape is an action that Prometheus server fetches metrics data from a list of
+configured targets. The targets are also called exporters.&lt;/p&gt;
+
+&lt;h2 id=&quot;scrape-discovery-manager&quot;&gt;Scrape discovery manager&lt;/h2&gt;
+
+&lt;p&gt;The scrape discovery manager is actually the service discovery manager. Here,
+finding the scrape targets is the same meaning as discovering services.&lt;/p&gt;
+
+&lt;p&gt;At the beginning, the discovery manager starts a goroutine called &lt;code class=&quot;highlighter-rouge&quot;&gt;sender&lt;/code&gt; which
+is responsible for sending all groups of targets to an exported channel, where the
+clients are waiting to receive. The sender repeatedly waits on a &lt;code class=&quot;highlighter-rouge&quot;&gt;triggerSend&lt;/code&gt;
+channel, if a signal is received, it then signals the clients.&lt;/p&gt;
+
+&lt;p&gt;After loading configuration, &lt;code class=&quot;highlighter-rouge&quot;&gt;discovery.Manager.ApplyConfig&lt;/code&gt; will be called. It
+iterates over a map with job name and &lt;code class=&quot;highlighter-rouge&quot;&gt;ServiceDiscoveryConfig&lt;/code&gt; pair
+(Interestingly, &lt;code class=&quot;highlighter-rouge&quot;&gt;StaticConfigs&lt;/code&gt; is also a field of &lt;code class=&quot;highlighter-rouge&quot;&gt;ServiceDiscoveryConfig&lt;/code&gt;
+struct), register each &lt;code class=&quot;highlighter-rouge&quot;&gt;SDConfig&lt;/code&gt; (except &lt;code class=&quot;highlighter-rouge&quot;&gt;StaticConfigs&lt;/code&gt;) as a provider, and each
+provider owns a field that implements &lt;code class=&quot;highlighter-rouge&quot;&gt;Discoverer&lt;/code&gt; interface. For
+&lt;code class=&quot;highlighter-rouge&quot;&gt;StaticConfigs&lt;/code&gt;, it creates a &lt;code class=&quot;highlighter-rouge&quot;&gt;StaticProvider&lt;/code&gt;, and make it act as a
+&lt;code class=&quot;highlighter-rouge&quot;&gt;Discoverer&lt;/code&gt; by returning groups of targets directly.&lt;/p&gt;
+
+&lt;p&gt;&lt;code class=&quot;highlighter-rouge&quot;&gt;Discoverer&lt;/code&gt; interface provides information about target groups. It maintains a set
+of sources from which &lt;code class=&quot;highlighter-rouge&quot;&gt;TargetGroups&lt;/code&gt; can originate. Whenever a discovery provider
+detects a potential change, it sends the &lt;code class=&quot;highlighter-rouge&quot;&gt;TargetGroup&lt;/code&gt; through its channel.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;
+  &lt;div class=&quot;snippet-header&quot;&gt;
+    &lt;div class=&quot;snippet-name&quot;&gt;&lt;span&gt;discovery/manager.go&lt;/span&gt;&lt;/div&gt;
+    &lt;div class=&quot;snippet-actions&quot;&gt;
+      &lt;button class=&quot;snippet-action-copy&quot; data-snippet=&quot;dHlwZSBEaXNjb3ZlcmVyIGludGVyZmFjZSB7CglSdW4oY3R4IGNvbnRleHQu
+Q29udGV4dCwgdXAgY2hhbjwtIFtdKnRhcmdldGdyb3VwLkdyb3VwKQp9
+&quot;&gt;&lt;/button&gt;
+    &lt;/div&gt;
+  &lt;/div&gt;
+  &lt;pre&gt;&lt;code class=&quot;language-golang&quot; data-lang=&quot;golang&quot;&gt;&lt;span class=&quot;k&quot;&gt;type&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;Discoverer&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;interface&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;Run&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;ctx&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;context&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;Context&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;up&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;chan&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;-&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;[]&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;targetgroup&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;Group&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;
+&lt;/figure&gt;
+
+&lt;p&gt;The discovery manager then starts each of providers. It starts a goroutine to
+run &lt;code class=&quot;highlighter-rouge&quot;&gt;Discoverer&lt;/code&gt;, and another goroutine to update groups of targets and trigger
+&lt;code class=&quot;highlighter-rouge&quot;&gt;sender&lt;/code&gt; to send all groups of targets.&lt;/p&gt;
+
+&lt;h2 id=&quot;scrape-manager&quot;&gt;Scrape manager&lt;/h2&gt;
+
+&lt;p&gt;At first, the scrape manager starts a goroutine to repeatedly wait to receive
+from an internal &lt;code class=&quot;highlighter-rouge&quot;&gt;triggerReload&lt;/code&gt; channel in order to reload. It then repeatedly
+waits to receive from a target sets channel to which &lt;a href=&quot;#scrape-discovery-manager&quot;&gt;scrape discovery
+manager&lt;/a&gt; sends. When target sets are updated, the
+scrape manager will send a signal to &lt;code class=&quot;highlighter-rouge&quot;&gt;triggerReload&lt;/code&gt; channel to do reloading
+stuff.&lt;/p&gt;
+
+&lt;p&gt;On reloading, it iterates over the target sets to check if a &lt;code class=&quot;highlighter-rouge&quot;&gt;scrapePoll&lt;/code&gt; with
+the set name as key exists. If it doesn’t exist, it creates one. It then starts
+a goroutine to execute &lt;code class=&quot;highlighter-rouge&quot;&gt;scrapePoll.Sync()&lt;/code&gt; to scrape groups of targets. For each
+target, it creates a scrape loop, starts a goroutine to execute scrape loop’s
+&lt;code class=&quot;highlighter-rouge&quot;&gt;run&lt;/code&gt; method, which will repeatedly scrape that target, parse scrape response,
+and append samples to the head.&lt;/p&gt;
+
+&lt;h3 id=&quot;scrape-a-target&quot;&gt;Scrape a target&lt;/h3&gt;
+
+&lt;p&gt;Package &lt;code class=&quot;highlighter-rouge&quot;&gt;scrape&lt;/code&gt; provides a &lt;code class=&quot;highlighter-rouge&quot;&gt;targetScraper&lt;/code&gt; struct which implements scraper
+interface for a target. When scraping, it checks if an http request has been
+created, if created, reuses it, otherwise creates a new one. It then sends the
+request to the http client to execute.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;
+  &lt;div class=&quot;snippet-header&quot;&gt;
+    &lt;div class=&quot;snippet-name&quot;&gt;&lt;span&gt;scrape/scrape.go&lt;/span&gt;&lt;/div&gt;
+    &lt;div class=&quot;snippet-actions&quot;&gt;
+      &lt;button class=&quot;snippet-action-copy&quot; data-snippet=&quot;dHlwZSB0YXJnZXRTY3JhcGVyIHN0cnVjdCB7CgkqVGFyZ2V0CgoJY2xpZW50
+ICAqaHR0cC5DbGllbnQKCXJlcSAgICAgKmh0dHAuUmVxdWVzdAoJdGltZW91
+dCB0aW1lLkR1cmF0aW9uCgoJZ3ppcHIgKmd6aXAuUmVhZGVyCglidWYgICAq
+YnVmaW8uUmVhZGVyCn0=
+&quot;&gt;&lt;/button&gt;
+    &lt;/div&gt;
+  &lt;/div&gt;
+  &lt;pre&gt;&lt;code class=&quot;language-golang&quot; data-lang=&quot;golang&quot;&gt;&lt;table class=&quot;rouge-table&quot;&gt;&lt;tbody&gt;&lt;tr&gt;&lt;td class=&quot;gutter gl&quot;&gt;&lt;pre class=&quot;lineno&quot;&gt;521
+522
+523
+524
+525
+526
+527
+528
+529
+530
+&lt;/pre&gt;&lt;/td&gt;&lt;td class=&quot;code&quot;&gt;&lt;pre&gt;&lt;span class=&quot;k&quot;&gt;type&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;targetScraper&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;struct&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+	&lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;Target&lt;/span&gt;
+
+	&lt;span class=&quot;n&quot;&gt;client&lt;/span&gt;  &lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;http&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;Client&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;req&lt;/span&gt;     &lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;http&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;Request&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;timeout&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;time&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;Duration&lt;/span&gt;
+
+	&lt;span class=&quot;n&quot;&gt;gzipr&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;gzip&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;Reader&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;buf&lt;/span&gt;   &lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;bufio&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;Reader&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+&lt;/pre&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/tbody&gt;&lt;/table&gt;&lt;/code&gt;&lt;/pre&gt;
+&lt;/figure&gt;
+
+&lt;h3 id=&quot;parse-scrape-response&quot;&gt;Parse scrape response&lt;/h3&gt;
+
+&lt;p&gt;During a scrape, a scrape target is expected to export a list of data items that
+conforms to some format. Each data item begins with a &lt;code class=&quot;highlighter-rouge&quot;&gt;HELP&lt;/code&gt; line, followed by a
+&lt;code class=&quot;highlighter-rouge&quot;&gt;TYPE&lt;/code&gt; line and a &lt;code class=&quot;highlighter-rouge&quot;&gt;UNIT&lt;/code&gt; line, and ends with one or more metric lines
+(&lt;code class=&quot;highlighter-rouge&quot;&gt;samples&lt;/code&gt;). Each metric line is called a &lt;code class=&quot;highlighter-rouge&quot;&gt;sample&lt;/code&gt;. A &lt;code class=&quot;highlighter-rouge&quot;&gt;sample&lt;/code&gt; is composed of a
+&lt;code class=&quot;highlighter-rouge&quot;&gt;series&lt;/code&gt;, a metric value and an optional timestamp. A &lt;code class=&quot;highlighter-rouge&quot;&gt;series&lt;/code&gt; is composed of
+the metric name and optional labels.&lt;/p&gt;
+
+&lt;div class=&quot;highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;# HELP &amp;lt;metric_name&amp;gt; &amp;lt;description&amp;gt;
+# TYPE &amp;lt;metric_name&amp;gt; &amp;lt;metric_type&amp;gt;
+# UNIT &amp;lt;metric_name&amp;gt; &amp;lt;metric_unit&amp;gt;
+&amp;lt;metric_name&amp;gt;{&amp;lt;labels&amp;gt;} &amp;lt;metric_value&amp;gt; [timestamp]
+&amp;lt;metric_name&amp;gt;{&amp;lt;labels&amp;gt;} &amp;lt;metric_value&amp;gt; [timestamp]
+...
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;For example, below is the partial of an http response from node exporter.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;
+  &lt;div class=&quot;snippet-header&quot;&gt;
+    &lt;div class=&quot;snippet-name&quot;&gt;&lt;span&gt;&lt;/span&gt;&lt;/div&gt;
+    &lt;div class=&quot;snippet-actions&quot;&gt;
+      &lt;button class=&quot;snippet-action-copy&quot; data-snippet=&quot;IyBIRUxQIG5vZGVfY3B1X3NlY29uZHNfdG90YWwgU2Vjb25kcyB0aGUgY3B1
+cyBzcGVudCBpbiBlYWNoIG1vZGUuCiMgVFlQRSBub2RlX2NwdV9zZWNvbmRz
+X3RvdGFsIGNvdW50ZXIKbm9kZV9jcHVfc2Vjb25kc190b3RhbHtjcHU9IjAi
+LG1vZGU9InN5c3RlbSJ9IDQ1MC41MQpub2RlX2NwdV9zZWNvbmRzX3RvdGFs
+e2NwdT0iMCIsbW9kZT0idXNlciJ9IDE0MjYuNDQKbm9kZV9jcHVfc2Vjb25k
+c190b3RhbHtjcHU9IjEiLG1vZGU9InN5c3RlbSJ9IDQxNi41Cm5vZGVfY3B1
+X3NlY29uZHNfdG90YWx7Y3B1PSIxIixtb2RlPSJ1c2VyIn0gMTQ1Ni44NQoj
+IEhFTFAgbm9kZV9tZW1vcnlfQWN0aXZlX2J5dGVzIE1lbW9yeSBpbmZvcm1h
+dGlvbiBmaWVsZCBBY3RpdmVfYnl0ZXMuCiMgVFlQRSBub2RlX21lbW9yeV9B
+Y3RpdmVfYnl0ZXMgZ2F1Z2UKbm9kZV9tZW1vcnlfQWN0aXZlX2J5dGVzIDUu
+MDY4NzAxNjk2ZSswOQ==
+&quot;&gt;&lt;/button&gt;
+    &lt;/div&gt;
+  &lt;/div&gt;
+  &lt;pre&gt;&lt;code class=&quot;language-conf&quot; data-lang=&quot;conf&quot;&gt;&lt;span class=&quot;c&quot;&gt;# HELP node_cpu_seconds_total Seconds the cpus spent in each mode.
+# TYPE node_cpu_seconds_total counter
+&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;node_cpu_seconds_total&lt;/span&gt;{&lt;span class=&quot;n&quot;&gt;cpu&lt;/span&gt;=&lt;span class=&quot;s2&quot;&gt;&quot;0&quot;&lt;/span&gt;,&lt;span class=&quot;n&quot;&gt;mode&lt;/span&gt;=&lt;span class=&quot;s2&quot;&gt;&quot;system&quot;&lt;/span&gt;} &lt;span class=&quot;m&quot;&gt;450&lt;/span&gt;.&lt;span class=&quot;m&quot;&gt;51&lt;/span&gt;
+&lt;span class=&quot;n&quot;&gt;node_cpu_seconds_total&lt;/span&gt;{&lt;span class=&quot;n&quot;&gt;cpu&lt;/span&gt;=&lt;span class=&quot;s2&quot;&gt;&quot;0&quot;&lt;/span&gt;,&lt;span class=&quot;n&quot;&gt;mode&lt;/span&gt;=&lt;span class=&quot;s2&quot;&gt;&quot;user&quot;&lt;/span&gt;} &lt;span class=&quot;m&quot;&gt;1426&lt;/span&gt;.&lt;span class=&quot;m&quot;&gt;44&lt;/span&gt;
+&lt;span class=&quot;n&quot;&gt;node_cpu_seconds_total&lt;/span&gt;{&lt;span class=&quot;n&quot;&gt;cpu&lt;/span&gt;=&lt;span class=&quot;s2&quot;&gt;&quot;1&quot;&lt;/span&gt;,&lt;span class=&quot;n&quot;&gt;mode&lt;/span&gt;=&lt;span class=&quot;s2&quot;&gt;&quot;system&quot;&lt;/span&gt;} &lt;span class=&quot;m&quot;&gt;416&lt;/span&gt;.&lt;span class=&quot;m&quot;&gt;5&lt;/span&gt;
+&lt;span class=&quot;n&quot;&gt;node_cpu_seconds_total&lt;/span&gt;{&lt;span class=&quot;n&quot;&gt;cpu&lt;/span&gt;=&lt;span class=&quot;s2&quot;&gt;&quot;1&quot;&lt;/span&gt;,&lt;span class=&quot;n&quot;&gt;mode&lt;/span&gt;=&lt;span class=&quot;s2&quot;&gt;&quot;user&quot;&lt;/span&gt;} &lt;span class=&quot;m&quot;&gt;1456&lt;/span&gt;.&lt;span class=&quot;m&quot;&gt;85&lt;/span&gt;
+&lt;span class=&quot;c&quot;&gt;# HELP node_memory_Active_bytes Memory information field Active_bytes.
+# TYPE node_memory_Active_bytes gauge
+&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;node_memory_Active_bytes&lt;/span&gt; &lt;span class=&quot;m&quot;&gt;5&lt;/span&gt;.&lt;span class=&quot;m&quot;&gt;068701696&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;e&lt;/span&gt;+&lt;span class=&quot;m&quot;&gt;09&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;
+&lt;/figure&gt;
+
+&lt;h3 id=&quot;append-samples-to-the-head&quot;&gt;Append samples to the head&lt;/h3&gt;
+
+&lt;p&gt;When the scrape manager is created, it’s initialized with a fanout storage. So
+when appending samples, it actually uses the &lt;code class=&quot;highlighter-rouge&quot;&gt;storage.Appender&lt;/code&gt; provided by the
+fanout storage. Let’s ignore remote storage for now, only consider local
+storage. The local storage &lt;code class=&quot;highlighter-rouge&quot;&gt;DB&lt;/code&gt; uses &lt;code class=&quot;highlighter-rouge&quot;&gt;headAppender&lt;/code&gt; as the implementation, so
+samples are finally appended through &lt;code class=&quot;highlighter-rouge&quot;&gt;headAppender&lt;/code&gt;.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;
+  &lt;div class=&quot;snippet-header&quot;&gt;
+    &lt;div class=&quot;snippet-name&quot;&gt;&lt;span&gt;tsdb/db.go&lt;/span&gt;&lt;/div&gt;
+    &lt;div class=&quot;snippet-actions&quot;&gt;
+      &lt;button class=&quot;snippet-action-copy&quot; data-snippet=&quot;ZnVuYyAoZGIgKkRCKSBBcHBlbmRlcigpIHN0b3JhZ2UuQXBwZW5kZXIgewoJ
+cmV0dXJuIGRiQXBwZW5kZXJ7ZGI6IGRiLCBBcHBlbmRlcjogZGIuaGVhZC5B
+cHBlbmRlcigpfQp9Cgp0eXBlIGRiQXBwZW5kZXIgc3RydWN0IHsKCXN0b3Jh
+Z2UuQXBwZW5kZXIKCWRiICpEQgp9
+&quot;&gt;&lt;/button&gt;
+    &lt;/div&gt;
+  &lt;/div&gt;
+  &lt;pre&gt;&lt;code class=&quot;language-golang&quot; data-lang=&quot;golang&quot;&gt;&lt;table class=&quot;rouge-table&quot;&gt;&lt;tbody&gt;&lt;tr&gt;&lt;td class=&quot;gutter gl&quot;&gt;&lt;pre class=&quot;lineno&quot;&gt;683
+684
+685
+686
+687
+688
+689
+690
+&lt;/pre&gt;&lt;/td&gt;&lt;td class=&quot;code&quot;&gt;&lt;pre&gt;&lt;span class=&quot;k&quot;&gt;func&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;db&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;DB&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;Appender&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;()&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;storage&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;Appender&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;dbAppender&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;db&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;db&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;Appender&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;db&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;head&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;Appender&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;()}&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+
+&lt;span class=&quot;k&quot;&gt;type&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;dbAppender&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;struct&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;storage&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;Appender&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;db&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;DB&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+&lt;/pre&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/tbody&gt;&lt;/table&gt;&lt;/code&gt;&lt;/pre&gt;
+&lt;/figure&gt;
+
+&lt;p&gt;When all samples from a scrape are added, it calls &lt;code class=&quot;highlighter-rouge&quot;&gt;Commit&lt;/code&gt;. When committing, it
+firstly writes ahead log, then it iterates over samples, and appends each sample
+to the corresponding memory series. If some error happens, it will call &lt;code class=&quot;highlighter-rouge&quot;&gt;Rollback&lt;/code&gt;.&lt;/p&gt;</content><author><name></name></author><summary type="html">Scrape is an action that Prometheus server fetches metrics data from a list of configured targets. The targets are also called exporters.</summary></entry><entry><title type="html">Prometheus bootstrap internals</title><link href="https://uzxmx.github.io/prometheus-bootstrap-internals.html" rel="alternate" type="text/html" title="Prometheus bootstrap internals" /><published>2020-05-24T14:25:00+08:00</published><updated>2020-05-24T14:25:00+08:00</updated><id>https://uzxmx.github.io/prometheus-bootstrap-internals</id><content type="html" xml:base="https://uzxmx.github.io/prometheus-bootstrap-internals.html">&lt;p&gt;Prometheus is a system and service monitoring system. It collects metrics from
+configured targets at given intervals, evaluates rule expressions, displays the
+results, and can trigger alerts if some condition is observed to be true.&lt;/p&gt;
+
+&lt;p&gt;This series of articles try to dig deeply into Prometheus internals to help readers
+understand Prometheus well. The dig is based on Prometheus v2.18.1.&lt;/p&gt;
+
+&lt;p class=&quot;notice--info&quot;&gt;&lt;strong&gt;Tip:&lt;/strong&gt; For more information about Prometheus, please visit
+&lt;a href=&quot;https://github.com/prometheus/prometheus&quot;&gt;here&lt;/a&gt;.&lt;/p&gt;
+
+&lt;h2 id=&quot;actors&quot;&gt;Actors&lt;/h2&gt;
+
+&lt;p&gt;Prometheus starts up from &lt;code class=&quot;highlighter-rouge&quot;&gt;cmd/prometheus/main.go&lt;/code&gt;. Inside &lt;code class=&quot;highlighter-rouge&quot;&gt;main&lt;/code&gt; function, It
+prepares a group of actors (functions) and runs them concurrently. Actors
+include:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;Actor that handles application termination.&lt;/li&gt;
+  &lt;li&gt;Actor that manages scrape discovery.&lt;/li&gt;
+  &lt;li&gt;Actor that manages notification discovery.&lt;/li&gt;
+  &lt;li&gt;Actor that manages scrape.&lt;/li&gt;
+  &lt;li&gt;Actor that handles reloading configuration.&lt;/li&gt;
+  &lt;li&gt;Actor that handles initial configuration loading. After loading, It executes a
+list of &lt;code class=&quot;highlighter-rouge&quot;&gt;ApplyConfig&lt;/code&gt; functions to initialize other actors.  &lt;code class=&quot;highlighter-rouge&quot;&gt;reloadReady&lt;/code&gt;
+channel will also be closed to notify other actors to proceed.&lt;/li&gt;
+  &lt;li&gt;Actor that manages rules.&lt;/li&gt;
+  &lt;li&gt;Actor that handles TSDB.&lt;/li&gt;
+  &lt;li&gt;Actor that handles web requests.&lt;/li&gt;
+  &lt;li&gt;Actor that sends notifications.&lt;/li&gt;
+&lt;/ul&gt;</content><author><name></name></author><summary type="html">Prometheus is a system and service monitoring system. It collects metrics from configured targets at given intervals, evaluates rule expressions, displays the results, and can trigger alerts if some condition is observed to be true.</summary></entry><entry><title type="html">Renew SSL certificates inside and outside Kubernetes</title><link href="https://uzxmx.github.io/renew-certificates-inside-outside-kubernetes.html" rel="alternate" type="text/html" title="Renew SSL certificates inside and outside Kubernetes" /><published>2020-04-26T21:25:09+08:00</published><updated>2020-04-26T21:25:09+08:00</updated><id>https://uzxmx.github.io/renew-certificates-inside-outside-kubernetes</id><content type="html" xml:base="https://uzxmx.github.io/renew-certificates-inside-outside-kubernetes.html">&lt;p&gt;If you get an SSL certificate from &lt;a href=&quot;https://letsencrypt.org/&quot;&gt;Let’s Encrypt&lt;/a&gt;, and the
+certificate is deployed not only in a &lt;a href=&quot;https://kubernetes.io/&quot;&gt;Kubernetes&lt;/a&gt; cluster, but also
+outside the cluster (e.g. an Nginx web server). Then when the certificate in
+Kubernetes cluster gets renewed, how can the same certificate outside Kubernetes
+cluster get renewed automatically?&lt;/p&gt;
+
+&lt;p&gt;For renewing SSL certificates automatically in Kubernetes cluster, we can rely
+on &lt;a href=&quot;https://github.com/jetstack/cert-manager&quot;&gt;cert-manager&lt;/a&gt;. cert-manager is a Kubernetes add-on to automate
+the management and issuance of TLS certificates from various issuing sources.
+It will ensure certificates are valid and up to date periodically, and attempt
+to renew certificates at an appropriate time before expiry.&lt;/p&gt;
+
+&lt;p&gt;For renewing SSL certificates outside Kubernetes cluster, we need to use some
+event mechanism. When cert-manager renews a certificate, it generates a
+Kubernetes event &lt;code class=&quot;highlighter-rouge&quot;&gt;Certificate:Issued&lt;/code&gt;, we can watch for that event and trigger
+the update of certificate outside Kubernetes cluster. Luckily, &lt;a href=&quot;https://brigade.sh/&quot;&gt;Brigade&lt;/a&gt; has
+provided that feature.&lt;/p&gt;
+
+&lt;p&gt;This post assumes cert-manager has been setup in Kubernetes cluster, and only
+outlines some key steps for updating certificates outside Kubernetes cluster.
+For a whole detailed setup, you can visit &lt;a href=&quot;https://github.com/uzxmx/cert-manager-box&quot;&gt;here&lt;/a&gt;.&lt;/p&gt;
+
+&lt;h3 id=&quot;setup-brigade-project&quot;&gt;Setup brigade project&lt;/h3&gt;
+
+&lt;p&gt;If you haven’t setup brigade in Kubernetes cluster, please visit
+&lt;a href=&quot;https://docs.brigade.sh/intro/quickstart/&quot;&gt;here&lt;/a&gt; to get started. Before
+creating a brigade project, we need to create a directory and initialize it as a
+git repository. Add a file &lt;code class=&quot;highlighter-rouge&quot;&gt;brigade.js&lt;/code&gt; in the repository root with below
+content.&lt;/p&gt;
+
+&lt;div class=&quot;language-javascript highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;kd&quot;&gt;const&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;events&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;require&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;dl&quot;&gt;&quot;&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;brigadier&lt;/span&gt;&lt;span class=&quot;dl&quot;&gt;&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+&lt;span class=&quot;kd&quot;&gt;const&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;k8s&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;require&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;dl&quot;&gt;&quot;&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;@kubernetes/client-node&lt;/span&gt;&lt;span class=&quot;dl&quot;&gt;&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+&lt;span class=&quot;kd&quot;&gt;const&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;axios&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;require&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;dl&quot;&gt;&quot;&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;axios&lt;/span&gt;&lt;span class=&quot;dl&quot;&gt;&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+
+&lt;span class=&quot;kd&quot;&gt;const&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;kc&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;new&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;k8s&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;KubeConfig&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;()&lt;/span&gt;
+&lt;span class=&quot;nx&quot;&gt;kc&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;loadFromDefault&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;()&lt;/span&gt;
+
+&lt;span class=&quot;kd&quot;&gt;const&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;k8sCoreApi&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;kc&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;makeApiClient&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;k8s&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;CoreV1Api&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+&lt;span class=&quot;kd&quot;&gt;const&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;k8sCustomObjectsApi&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;kc&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;makeApiClient&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;k8s&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;CustomObjectsApi&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+
+&lt;span class=&quot;kd&quot;&gt;const&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;getCertificate&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;async&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;name&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;namespace&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&amp;gt;&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+  &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;await&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;k8sCustomObjectsApi&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;getNamespacedCustomObject&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;dl&quot;&gt;&quot;&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;cert-manager.io&lt;/span&gt;&lt;span class=&quot;dl&quot;&gt;&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;dl&quot;&gt;&quot;&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;v1alpha2&lt;/span&gt;&lt;span class=&quot;dl&quot;&gt;&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;namespace&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;dl&quot;&gt;&quot;&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;certificates&lt;/span&gt;&lt;span class=&quot;dl&quot;&gt;&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;name&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+
+&lt;span class=&quot;kd&quot;&gt;const&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;getSecret&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;async&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;name&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;namespace&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&amp;gt;&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+  &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;await&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;k8sCoreApi&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;readNamespacedSecret&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;name&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;namespace&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+
+&lt;span class=&quot;nx&quot;&gt;events&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;on&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;dl&quot;&gt;&quot;&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;Certificate:Issued&lt;/span&gt;&lt;span class=&quot;dl&quot;&gt;&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;e&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;p&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&amp;gt;&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+  &lt;span class=&quot;kd&quot;&gt;let&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;payload&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;JSON&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;parse&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;e&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;payload&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+  &lt;span class=&quot;kd&quot;&gt;let&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;involvedObject&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;payload&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;involvedObject&lt;/span&gt;
+  &lt;span class=&quot;nx&quot;&gt;getCertificate&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;involvedObject&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;name&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;involvedObject&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;namespace&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;).&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;then&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;cert&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&amp;gt;&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+    &lt;span class=&quot;nx&quot;&gt;cert&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;cert&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;body&lt;/span&gt;
+    &lt;span class=&quot;kd&quot;&gt;let&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;spec&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;cert&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;spec&lt;/span&gt;
+    &lt;span class=&quot;kd&quot;&gt;let&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;commonName&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;spec&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;commonName&lt;/span&gt;
+    &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;commonName&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;startsWith&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;dl&quot;&gt;&quot;&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;*.&lt;/span&gt;&lt;span class=&quot;dl&quot;&gt;&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;))&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+      &lt;span class=&quot;nx&quot;&gt;commonName&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;commonName&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;substring&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;2&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;commonName&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;length&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+    &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+
+    &lt;span class=&quot;nx&quot;&gt;getSecret&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;spec&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;secretName&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;cert&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;metadata&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;namespace&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;).&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;then&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;secret&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&amp;gt;&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+      &lt;span class=&quot;kd&quot;&gt;let&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;data&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;secret&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;body&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;data&lt;/span&gt;
+
+      &lt;span class=&quot;kd&quot;&gt;let&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;buf&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;new&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;Buffer&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;data&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;dl&quot;&gt;&quot;&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;tls.crt&lt;/span&gt;&lt;span class=&quot;dl&quot;&gt;&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;],&lt;/span&gt; &lt;span class=&quot;dl&quot;&gt;&quot;&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;base64&lt;/span&gt;&lt;span class=&quot;dl&quot;&gt;&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+      &lt;span class=&quot;kd&quot;&gt;let&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;certPem&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;buf&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;toString&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;dl&quot;&gt;&quot;&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;ascii&lt;/span&gt;&lt;span class=&quot;dl&quot;&gt;&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+      &lt;span class=&quot;nx&quot;&gt;buf&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;new&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;Buffer&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;data&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;dl&quot;&gt;&quot;&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;tls.key&lt;/span&gt;&lt;span class=&quot;dl&quot;&gt;&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;],&lt;/span&gt; &lt;span class=&quot;dl&quot;&gt;&quot;&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;base64&lt;/span&gt;&lt;span class=&quot;dl&quot;&gt;&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+      &lt;span class=&quot;kd&quot;&gt;let&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;keyPem&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;buf&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;toString&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;dl&quot;&gt;&quot;&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;ascii&lt;/span&gt;&lt;span class=&quot;dl&quot;&gt;&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+
+      &lt;span class=&quot;nx&quot;&gt;console&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;log&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;dl&quot;&gt;&quot;&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;certPem: &lt;/span&gt;&lt;span class=&quot;dl&quot;&gt;&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;certPem&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+      &lt;span class=&quot;nx&quot;&gt;console&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;log&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;dl&quot;&gt;&quot;&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;keyPem: &lt;/span&gt;&lt;span class=&quot;dl&quot;&gt;&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;keyPem&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+
+      &lt;span class=&quot;c1&quot;&gt;// TODO uncomment this if you want to trigger Gitlab CI pipeline through webhook.&lt;/span&gt;
+      &lt;span class=&quot;c1&quot;&gt;// axios.post('https://gitlab.exaple.com/api/v4/projects/1/trigger/pipeline', {&lt;/span&gt;
+      &lt;span class=&quot;c1&quot;&gt;//   token: 'YOUR_GITLAB_CI_TOKEN',&lt;/span&gt;
+      &lt;span class=&quot;c1&quot;&gt;//   ref: 'master',&lt;/span&gt;
+      &lt;span class=&quot;c1&quot;&gt;//   variables: {&lt;/span&gt;
+      &lt;span class=&quot;c1&quot;&gt;//     COMMON_NAME: commonName,&lt;/span&gt;
+      &lt;span class=&quot;c1&quot;&gt;//     TLS_CERT: data['tls.crt'],&lt;/span&gt;
+      &lt;span class=&quot;c1&quot;&gt;//     TLS_KEY: data['tls.key']&lt;/span&gt;
+      &lt;span class=&quot;c1&quot;&gt;//   }&lt;/span&gt;
+      &lt;span class=&quot;c1&quot;&gt;// })&lt;/span&gt;
+    &lt;span class=&quot;p&quot;&gt;})&lt;/span&gt;
+  &lt;span class=&quot;p&quot;&gt;})&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;})&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;The above snippets only output certificate and private key file. To update
+certificate elsewhere, you can pass the certificate through webhook to Gitlab
+CI, Jenkins or other CI service to synchronize certificates.&lt;/p&gt;
+
+&lt;p&gt;We also need to add a file &lt;code class=&quot;highlighter-rouge&quot;&gt;brigade.json&lt;/code&gt; in the root directory to specify
+dependencies imported in &lt;code class=&quot;highlighter-rouge&quot;&gt;brigade.js&lt;/code&gt;.&lt;/p&gt;
+
+&lt;div class=&quot;language-json highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;&lt;span class=&quot;w&quot;&gt;
+  &lt;/span&gt;&lt;span class=&quot;nl&quot;&gt;&quot;dependencies&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt;&lt;span class=&quot;w&quot;&gt; &lt;/span&gt;&lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;&lt;span class=&quot;w&quot;&gt;
+    &lt;/span&gt;&lt;span class=&quot;nl&quot;&gt;&quot;axios&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt;&lt;span class=&quot;w&quot;&gt; &lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&quot;0.19.0&quot;&lt;/span&gt;&lt;span class=&quot;w&quot;&gt;
+  &lt;/span&gt;&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;span class=&quot;w&quot;&gt;
+&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;span class=&quot;w&quot;&gt;
+&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;Then we’re good to create a brigade project.&lt;/p&gt;
+
+&lt;h3 id=&quot;watch-for-certificates-issued-events&quot;&gt;Watch for certificates issued events&lt;/h3&gt;
+
+&lt;p&gt;&lt;a href=&quot;https://github.com/uzxmx/brigade-k8s-gateway&quot;&gt;Brigade Kubernetes Gateway&lt;/a&gt; can
+watch for events in Kubernetes cluster, and send an event to brigade core, then
+a brigade worker will be created to execute a project’s &lt;code class=&quot;highlighter-rouge&quot;&gt;brigade.js&lt;/code&gt; file.&lt;/p&gt;
+
+&lt;p&gt;Download the latest chart from &lt;a href=&quot;https://github.com/uzxmx/brigade-k8s-gateway/releases&quot;&gt;here&lt;/a&gt;, and
+use helm to install it. Specify below &lt;code class=&quot;highlighter-rouge&quot;&gt;values.yml&lt;/code&gt; file. Replace YOUR_PROJECT_ID
+with your real brigade project id.&lt;/p&gt;
+
+&lt;div class=&quot;language-yaml highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;na&quot;&gt;project&lt;/span&gt;&lt;span class=&quot;pi&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;YOUR_PROJECT_ID&lt;/span&gt;
+&lt;span class=&quot;na&quot;&gt;filters&lt;/span&gt;&lt;span class=&quot;pi&quot;&gt;:&lt;/span&gt;
+  &lt;span class=&quot;pi&quot;&gt;-&lt;/span&gt; &lt;span class=&quot;na&quot;&gt;kind&lt;/span&gt;&lt;span class=&quot;pi&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;Certificate&lt;/span&gt;
+    &lt;span class=&quot;na&quot;&gt;reasons&lt;/span&gt;&lt;span class=&quot;pi&quot;&gt;:&lt;/span&gt;
+      &lt;span class=&quot;pi&quot;&gt;-&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;Issued&lt;/span&gt;
+    &lt;span class=&quot;na&quot;&gt;action&lt;/span&gt;&lt;span class=&quot;pi&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;accept&lt;/span&gt;
+  &lt;span class=&quot;pi&quot;&gt;-&lt;/span&gt; &lt;span class=&quot;na&quot;&gt;action&lt;/span&gt;&lt;span class=&quot;pi&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;reject&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;h3 id=&quot;test-it-out&quot;&gt;Test it out&lt;/h3&gt;
+
+&lt;p&gt;When a certificate is renewed or a new certificate is created, a pod of a
+brigade worker for the created project should be launched, and in the pod logs
+there should be the contents of certificate and private key. For convenience,
+you can even generate a fake &lt;code class=&quot;highlighter-rouge&quot;&gt;Certificate:Issued&lt;/code&gt; event by using this
+&lt;a href=&quot;https://github.com/uzxmx/k8s-busybox&quot;&gt;utility&lt;/a&gt;.&lt;/p&gt;
+
+&lt;div class=&quot;language-sh highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;nv&quot;&gt;$ &lt;/span&gt;curl &lt;span class=&quot;nt&quot;&gt;-C-&lt;/span&gt; &lt;span class=&quot;nt&quot;&gt;-L&lt;/span&gt; &lt;span class=&quot;nt&quot;&gt;-O&lt;/span&gt; https://github.com/uzxmx/k8s-busybox/releases/download/v0.1.0/k8s-busybox-v0.1.0-linux-amd64.tar.gz
+&lt;span class=&quot;nv&quot;&gt;$ &lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;tar &lt;/span&gt;zxf k8s-busybox-v0.1.0-linux-amd64.tar.gz
+&lt;span class=&quot;nv&quot;&gt;$ &lt;/span&gt;./linux-amd64/bin/k8s-eventgenerator &lt;span class=&quot;nt&quot;&gt;--name&lt;/span&gt; YOUR_CERTIFICATE_NAME &lt;span class=&quot;se&quot;&gt;\&lt;/span&gt;
+    &lt;span class=&quot;nt&quot;&gt;--kind&lt;/span&gt; Certificate &lt;span class=&quot;nt&quot;&gt;--reason&lt;/span&gt; Issued &lt;span class=&quot;nt&quot;&gt;--message&lt;/span&gt; &lt;span class=&quot;s1&quot;&gt;'Fake event'&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;</content><author><name></name></author><summary type="html">If you get an SSL certificate from Let’s Encrypt, and the certificate is deployed not only in a Kubernetes cluster, but also outside the cluster (e.g. an Nginx web server). Then when the certificate in Kubernetes cluster gets renewed, how can the same certificate outside Kubernetes cluster get renewed automatically?</summary></entry><entry><title type="html">Add or remove Java annotation at runtime</title><link href="https://uzxmx.github.io/add-or-remove-java-annotation-at-runtime.html" rel="alternate" type="text/html" title="Add or remove Java annotation at runtime" /><published>2020-04-22T20:01:04+08:00</published><updated>2020-04-22T20:01:04+08:00</updated><id>https://uzxmx.github.io/add-or-remove-java-annotation-at-runtime</id><content type="html" xml:base="https://uzxmx.github.io/add-or-remove-java-annotation-at-runtime.html">&lt;p&gt;Java is a language whose source files are compiled to bytecode. Unlike C/C++, we
+cannot use preprocessing directive such as &lt;code class=&quot;highlighter-rouge&quot;&gt;#ifdef&lt;/code&gt; syntactically. Suppose there is
+such a case that normally a Java application runs with an annotation, but when
+it’s launched with some environment variable, then that annotation shouldn’t be
+defined (should be removed). For example:&lt;/p&gt;
+
+&lt;div class=&quot;language-java highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;nd&quot;&gt;@Entity&lt;/span&gt;
+&lt;span class=&quot;kd&quot;&gt;public&lt;/span&gt; &lt;span class=&quot;kd&quot;&gt;class&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;Foo&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+
+  &lt;span class=&quot;nd&quot;&gt;@Id&lt;/span&gt;
+  &lt;span class=&quot;c1&quot;&gt;// If application is launched with Role=replica, we don't want the below line.&lt;/span&gt;
+  &lt;span class=&quot;nd&quot;&gt;@GeneratedValue&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;strategy&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;GenerationType&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;IDENTITY&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt;
+  &lt;span class=&quot;kd&quot;&gt;private&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;Long&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;id&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;;&lt;/span&gt;
+&lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;So how exactly do we solve the above issue?&lt;/p&gt;
+
+&lt;p&gt;Basically, there are two ways. One way is to use a preprocessing step. We can use
+&lt;code class=&quot;highlighter-rouge&quot;&gt;sed -i -e '/PATTERN/d' YOUR_FILE.java&lt;/code&gt; to pre-process when building a jar
+package. This is especially useful when we use docker to build with different
+options. Another way is to add/remove the annotation dynamically at runtime. For
+this purpose, we need to import two dependencies: &lt;a href=&quot;https://www.javassist.org/&quot;&gt;Javasist&lt;/a&gt; and &lt;a href=&quot;https://bytebuddy.net/#/&quot;&gt;Byte Buddy&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;We will use &lt;a href=&quot;https://www.javassist.org/&quot;&gt;Javasist&lt;/a&gt; to modify and generate bytecodes, and &lt;a href=&quot;bytebuddy&quot;&gt;Byte
+Buddy&lt;/a&gt; as instrumentation agent to retransform class. We will use
+Spring Cloud to build a demo project and add some tests. The demo project can be
+found &lt;a href=&quot;https://github.com/uzxmx/javasist-demo&quot;&gt;here&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p class=&quot;notice--info&quot;&gt;&lt;strong&gt;Tip:&lt;/strong&gt; For more information about Java instrumentation, please visit
+&lt;a href=&quot;https://docs.oracle.com/javase/8/docs/api/java/lang/instrument/package-summary.html&quot;&gt;here&lt;/a&gt;.&lt;/p&gt;
+
+&lt;h3 id=&quot;add-annotation-to-a-java-class-field&quot;&gt;Add annotation to a Java class field&lt;/h3&gt;
+
+&lt;p&gt;Here is the core part of code snippets that add annotation to a Java class
+field:&lt;/p&gt;
+
+&lt;div class=&quot;language-java highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;kd&quot;&gt;public&lt;/span&gt; &lt;span class=&quot;kd&quot;&gt;class&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;JavasistUtils&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+
+    &lt;span class=&quot;kd&quot;&gt;public&lt;/span&gt; &lt;span class=&quot;kd&quot;&gt;static&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;addAnnotationToField&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;Class&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;?&amp;gt;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;clazz&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;String&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;fieldName&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;Class&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;?&amp;gt;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;annotationClass&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt;
+                                            &lt;span class=&quot;nc&quot;&gt;BiConsumer&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;Annotation&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;ConstPool&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;initAnnotation&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+        &lt;span class=&quot;nc&quot;&gt;ClassPool&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;pool&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;ClassPool&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;getDefault&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;();&lt;/span&gt;
+        &lt;span class=&quot;nc&quot;&gt;CtClass&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ctClass&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;;&lt;/span&gt;
+        &lt;span class=&quot;k&quot;&gt;try&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+            &lt;span class=&quot;n&quot;&gt;ctClass&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;pool&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;getCtClass&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;clazz&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;getName&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;());&lt;/span&gt;
+            &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;ctClass&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;isFrozen&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;())&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+                &lt;span class=&quot;n&quot;&gt;ctClass&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;defrost&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;();&lt;/span&gt;
+            &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+            &lt;span class=&quot;nc&quot;&gt;CtField&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ctField&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ctClass&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;getDeclaredField&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;fieldName&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;);&lt;/span&gt;
+            &lt;span class=&quot;nc&quot;&gt;ConstPool&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;constPool&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ctClass&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;getClassFile&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;().&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;getConstPool&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;();&lt;/span&gt;
+
+            &lt;span class=&quot;nc&quot;&gt;Annotation&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;annotation&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;new&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;Annotation&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;annotationClass&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;getName&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(),&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;constPool&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;);&lt;/span&gt;
+            &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;initAnnotation&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;!=&lt;/span&gt; &lt;span class=&quot;kc&quot;&gt;null&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+                &lt;span class=&quot;n&quot;&gt;initAnnotation&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;accept&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;annotation&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;constPool&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;);&lt;/span&gt;
+            &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+
+            &lt;span class=&quot;nc&quot;&gt;AnnotationsAttribute&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;attr&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;getAnnotationsAttributeFromField&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;ctField&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;);&lt;/span&gt;
+            &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;attr&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;==&lt;/span&gt; &lt;span class=&quot;kc&quot;&gt;null&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+                &lt;span class=&quot;n&quot;&gt;attr&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;new&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;AnnotationsAttribute&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;constPool&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;AnnotationsAttribute&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;visibleTag&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;);&lt;/span&gt;
+                &lt;span class=&quot;n&quot;&gt;ctField&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;getFieldInfo&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;().&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;addAttribute&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;attr&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;);&lt;/span&gt;
+            &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+            &lt;span class=&quot;n&quot;&gt;attr&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;addAnnotation&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;annotation&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;);&lt;/span&gt;
+
+            &lt;span class=&quot;n&quot;&gt;retransformClass&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;clazz&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ctClass&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;toBytecode&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;());&lt;/span&gt;
+        &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;catch&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;NotFoundException&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;|&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;IOException&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;|&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;CannotCompileException&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;e&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+            &lt;span class=&quot;n&quot;&gt;e&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;printStackTrace&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;();&lt;/span&gt;
+        &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+&lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;h3 id=&quot;remove-annotation-from-a-java-class-field&quot;&gt;Remove annotation from a Java class field&lt;/h3&gt;
+
+&lt;p&gt;Here is the core part of code snippets that remove annotation from a Java class
+field:&lt;/p&gt;
+
+&lt;div class=&quot;language-java highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;kd&quot;&gt;public&lt;/span&gt; &lt;span class=&quot;kd&quot;&gt;class&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;JavasistUtils&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+
+    &lt;span class=&quot;kd&quot;&gt;public&lt;/span&gt; &lt;span class=&quot;kd&quot;&gt;static&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;removeAnnotationFromField&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;Class&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;?&amp;gt;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;clazz&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;String&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;fieldName&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;Class&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;?&amp;gt;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;annotationClass&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+        &lt;span class=&quot;nc&quot;&gt;ClassPool&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;pool&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;ClassPool&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;getDefault&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;();&lt;/span&gt;
+        &lt;span class=&quot;nc&quot;&gt;CtClass&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ctClass&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;;&lt;/span&gt;
+        &lt;span class=&quot;k&quot;&gt;try&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+            &lt;span class=&quot;n&quot;&gt;ctClass&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;pool&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;getCtClass&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;clazz&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;getName&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;());&lt;/span&gt;
+            &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;ctClass&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;isFrozen&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;())&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+                &lt;span class=&quot;n&quot;&gt;ctClass&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;defrost&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;();&lt;/span&gt;
+            &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+            &lt;span class=&quot;nc&quot;&gt;CtField&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ctField&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ctClass&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;getDeclaredField&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;fieldName&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;);&lt;/span&gt;
+
+            &lt;span class=&quot;nc&quot;&gt;AnnotationsAttribute&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;attr&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;getAnnotationsAttributeFromField&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;ctField&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;);&lt;/span&gt;
+            &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;attr&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;!=&lt;/span&gt; &lt;span class=&quot;kc&quot;&gt;null&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+                &lt;span class=&quot;n&quot;&gt;attr&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;removeAnnotation&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;annotationClass&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;getName&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;());&lt;/span&gt;
+            &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+
+            &lt;span class=&quot;n&quot;&gt;retransformClass&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;clazz&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ctClass&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;toBytecode&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;());&lt;/span&gt;
+        &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;catch&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;NotFoundException&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;|&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;IOException&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;|&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;CannotCompileException&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;e&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+            &lt;span class=&quot;n&quot;&gt;e&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;printStackTrace&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;();&lt;/span&gt;
+        &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+&lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;h3 id=&quot;test-it-out&quot;&gt;Test it out&lt;/h3&gt;
+
+&lt;p&gt;First, we add two classes: Base and Book.&lt;/p&gt;
+
+&lt;div class=&quot;language-java highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;nd&quot;&gt;@MappedSuperclass&lt;/span&gt;
+&lt;span class=&quot;kd&quot;&gt;public&lt;/span&gt; &lt;span class=&quot;kd&quot;&gt;class&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;Base&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+
+    &lt;span class=&quot;nd&quot;&gt;@Id&lt;/span&gt;
+    &lt;span class=&quot;nd&quot;&gt;@GeneratedValue&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;strategy&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;GenerationType&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;IDENTITY&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt;
+    &lt;span class=&quot;kd&quot;&gt;private&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;Long&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;id&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;;&lt;/span&gt;
+
+    &lt;span class=&quot;kd&quot;&gt;public&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;Long&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;getId&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;()&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+        &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;id&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;;&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+
+    &lt;span class=&quot;kd&quot;&gt;public&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;setId&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;Long&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;id&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+        &lt;span class=&quot;k&quot;&gt;this&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;id&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;id&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;;&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+&lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;div class=&quot;language-java highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;nd&quot;&gt;@Entity&lt;/span&gt;
+&lt;span class=&quot;kd&quot;&gt;public&lt;/span&gt; &lt;span class=&quot;kd&quot;&gt;class&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;Book&lt;/span&gt; &lt;span class=&quot;kd&quot;&gt;extends&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;Base&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+
+    &lt;span class=&quot;kd&quot;&gt;private&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;String&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;name&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;;&lt;/span&gt;
+
+    &lt;span class=&quot;kd&quot;&gt;public&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;String&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;getName&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;()&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+        &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;name&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;;&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+
+    &lt;span class=&quot;kd&quot;&gt;public&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;setName&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;String&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;name&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+        &lt;span class=&quot;k&quot;&gt;this&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;name&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;name&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;;&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+&lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;Then let’s add unit tests to test if we can remove an annotation successfully.&lt;/p&gt;
+
+&lt;div class=&quot;language-java highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;nd&quot;&gt;@ExtendWith&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;Extension&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;class&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt;
+&lt;span class=&quot;nd&quot;&gt;@DataJpaTest&lt;/span&gt;
+&lt;span class=&quot;nd&quot;&gt;@TestExecutionListeners&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;
+    &lt;span class=&quot;n&quot;&gt;listeners&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;DirtiesContextBeforeAndAfterClassTestExecutionListener&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;class&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt;
+    &lt;span class=&quot;n&quot;&gt;mergeMode&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;MergeMode&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;MERGE_WITH_DEFAULTS&lt;/span&gt;
+&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt;
+&lt;span class=&quot;kd&quot;&gt;public&lt;/span&gt; &lt;span class=&quot;kd&quot;&gt;class&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;JavasistUtilsTests&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+
+    &lt;span class=&quot;nd&quot;&gt;@Autowired&lt;/span&gt;
+    &lt;span class=&quot;kd&quot;&gt;private&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;BookRepository&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;bookRepository&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;;&lt;/span&gt;
+
+    &lt;span class=&quot;nd&quot;&gt;@Test&lt;/span&gt;
+    &lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;testExceptionThrownWhenIdNotSpecified&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;()&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+        &lt;span class=&quot;nc&quot;&gt;JpaSystemException&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;exception&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;assertThrows&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;JpaSystemException&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;class&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;()&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+            &lt;span class=&quot;nc&quot;&gt;Book&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;book&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;new&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;Book&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;();&lt;/span&gt;
+            &lt;span class=&quot;n&quot;&gt;book&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;setName&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;Learn Spring&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;);&lt;/span&gt;
+            &lt;span class=&quot;n&quot;&gt;bookRepository&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;saveAndFlush&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;book&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;);&lt;/span&gt;
+        &lt;span class=&quot;o&quot;&gt;});&lt;/span&gt;
+
+        &lt;span class=&quot;n&quot;&gt;assertTrue&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;exception&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;getMessage&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;().&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;startsWith&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;ids for this class must be manually assigned before calling save()&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;));&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+
+    &lt;span class=&quot;nd&quot;&gt;@Test&lt;/span&gt;
+    &lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;testOKWhenIdSpecified&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;()&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+        &lt;span class=&quot;nc&quot;&gt;Book&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;book&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;new&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;Book&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;();&lt;/span&gt;
+        &lt;span class=&quot;n&quot;&gt;book&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;setId&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1L&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;);&lt;/span&gt;
+        &lt;span class=&quot;n&quot;&gt;book&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;setName&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;Learn Spring&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;);&lt;/span&gt;
+        &lt;span class=&quot;n&quot;&gt;bookRepository&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;saveAndFlush&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;book&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;);&lt;/span&gt;
+
+        &lt;span class=&quot;nc&quot;&gt;Book&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;b&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;bookRepository&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;findById&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1L&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;).&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;get&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;();&lt;/span&gt;
+        &lt;span class=&quot;n&quot;&gt;assertTrue&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;b&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;getName&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;().&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;equals&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;Learn Spring&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;));&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+
+    &lt;span class=&quot;kd&quot;&gt;public&lt;/span&gt; &lt;span class=&quot;kd&quot;&gt;static&lt;/span&gt; &lt;span class=&quot;kd&quot;&gt;class&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;Extension&lt;/span&gt; &lt;span class=&quot;kd&quot;&gt;implements&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;BeforeAllCallback&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;AfterAllCallback&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+
+        &lt;span class=&quot;nd&quot;&gt;@Override&lt;/span&gt;
+        &lt;span class=&quot;kd&quot;&gt;public&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;beforeAll&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;ExtensionContext&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;arg0&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;kd&quot;&gt;throws&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;Exception&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+            &lt;span class=&quot;nc&quot;&gt;JavasistUtils&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;removeAnnotationFromField&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;Base&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;class&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;&quot;id&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;GeneratedValue&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;class&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;);&lt;/span&gt;
+        &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+
+        &lt;span class=&quot;nd&quot;&gt;@Override&lt;/span&gt;
+        &lt;span class=&quot;kd&quot;&gt;public&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;afterAll&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;ExtensionContext&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;arg0&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;kd&quot;&gt;throws&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;Exception&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+            &lt;span class=&quot;nc&quot;&gt;JavasistUtils&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;addAnnotationToField&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;Base&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;class&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;&quot;id&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;GeneratedValue&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;class&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;annotation&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;constPool&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+                &lt;span class=&quot;nc&quot;&gt;EnumMemberValue&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;memberValue&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;new&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;EnumMemberValue&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;constPool&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;);&lt;/span&gt;
+                &lt;span class=&quot;n&quot;&gt;memberValue&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;setType&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;GenerationType&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;class&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;getName&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;());&lt;/span&gt;
+                &lt;span class=&quot;n&quot;&gt;memberValue&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;setValue&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;GenerationType&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;IDENTITY&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;name&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;());&lt;/span&gt;
+                &lt;span class=&quot;n&quot;&gt;annotation&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;addMemberValue&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;strategy&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;memberValue&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;);&lt;/span&gt;
+            &lt;span class=&quot;o&quot;&gt;});&lt;/span&gt;
+        &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+&lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;h3 id=&quot;gotchas&quot;&gt;Gotchas&lt;/h3&gt;
+
+&lt;p&gt;Note the above &lt;code class=&quot;highlighter-rouge&quot;&gt;Extension&lt;/code&gt; class. &lt;code class=&quot;highlighter-rouge&quot;&gt;Extension#beforeAll&lt;/code&gt; will be invoked before
+any test in &lt;code class=&quot;highlighter-rouge&quot;&gt;JavasistUtilsTests&lt;/code&gt; runs. &lt;code class=&quot;highlighter-rouge&quot;&gt;Extension#afterAll&lt;/code&gt; will be invoked
+after all tests in &lt;code class=&quot;highlighter-rouge&quot;&gt;JavasistUtilsTests&lt;/code&gt; run. So it means before any test in
+&lt;code class=&quot;highlighter-rouge&quot;&gt;JavaJavasistUtilsTests&lt;/code&gt; runs, we remove annotation &lt;code class=&quot;highlighter-rouge&quot;&gt;@GeneratedValue&lt;/code&gt; from
+&lt;code class=&quot;highlighter-rouge&quot;&gt;Base#id&lt;/code&gt; field. If we don’t specify an id value, then invoking
+&lt;code class=&quot;highlighter-rouge&quot;&gt;BookRepository#saveAndFlush&lt;/code&gt; will throw an exception that says “ids must be
+manually assigned”. When all tests in &lt;code class=&quot;highlighter-rouge&quot;&gt;JavaJavasistUtilsTests&lt;/code&gt; finish, we add
+that annotation back so that other test classes can run normally.&lt;/p&gt;
+
+&lt;p&gt;Another gotcha is we add a custom class
+&lt;code class=&quot;highlighter-rouge&quot;&gt;DirtiesContextBeforeAndAfterClassTestExecutionListener.class&lt;/code&gt; as test execution
+listener. We need to ensure the spring application context is marked as dirty
+both BEFORE and AFTER class to have JPA entity classes normally parsed in all
+test classes. We cannot use &lt;code class=&quot;highlighter-rouge&quot;&gt;@DirtiesContext&lt;/code&gt; here, because it only mark context
+as dirty either BEFORE or AFTER. For more information about this gotcha, please
+visit the stackoverflow &lt;a href=&quot;https://stackoverflow.com/a/39292587&quot;&gt;anwser&lt;/a&gt;.&lt;/p&gt;
+
+&lt;h3 id=&quot;source-codes&quot;&gt;Source codes&lt;/h3&gt;
+
+&lt;p&gt;The demo project with full source codes is at &lt;a href=&quot;https://github.com/uzxmx/javasist-demo&quot;&gt;here&lt;/a&gt;.&lt;/p&gt;</content><author><name></name></author><summary type="html">Java is a language whose source files are compiled to bytecode. Unlike C/C++, we cannot use preprocessing directive such as #ifdef syntactically. Suppose there is such a case that normally a Java application runs with an annotation, but when it’s launched with some environment variable, then that annotation shouldn’t be defined (should be removed). For example:</summary></entry><entry><title type="html">WSL tricks</title><link href="https://uzxmx.github.io/wsl-tricks.html" rel="alternate" type="text/html" title="WSL tricks" /><published>2020-04-11T19:37:24+08:00</published><updated>2020-04-11T19:37:24+08:00</updated><id>https://uzxmx.github.io/wsl-tricks</id><content type="html" xml:base="https://uzxmx.github.io/wsl-tricks.html">&lt;p&gt;This post shares some WSL (Windows Subsystem for Linux) tricks. The Windows
+Subsystem for Linux lets developers run a GNU/Linux environment – including
+most command-line tools, utilities, and applications – directly on Windows,
+unmodified, without the overhead of a virtual machine.&lt;/p&gt;
+
+&lt;p class=&quot;notice--info&quot;&gt;&lt;strong&gt;Tip:&lt;/strong&gt; If you haven’t heard of WSL, you can find more information
+&lt;a href=&quot;https://docs.microsoft.com/en-us/windows/wsl/about&quot;&gt;here&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;When I installed WSL Ubuntu, and setup the development environment using my
+&lt;a href=&quot;https://github.com/uzxmx/dotfiles&quot;&gt;dotfiles&lt;/a&gt;, I encountered some issues and inconveniences, such as:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;New directory is created wrongly with 777 permission.&lt;/li&gt;
+  &lt;li&gt;Directory shows ugly green background.&lt;/li&gt;
+  &lt;li&gt;Need to input passphrase for my private key every time I ssh into a machine.&lt;/li&gt;
+  &lt;li&gt;Cannot open directory from WSL.&lt;/li&gt;
+  &lt;li&gt;…&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;Below I list solutions for each of those issues.&lt;/p&gt;
+
+&lt;h3 id=&quot;wrong-777-permission&quot;&gt;Wrong 777 permission&lt;/h3&gt;
+
+&lt;p&gt;Basically, there are two kinds of 777 permission issues. They are:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;The mounted directories from Windows system (like files in C drive) having 777
+permission.&lt;/li&gt;
+  &lt;li&gt;Newly created directories on WSL having 777 permission.&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;h4 id=&quot;for-mounted-directories-from-windows-system&quot;&gt;For mounted directories from Windows system&lt;/h4&gt;
+
+&lt;p&gt;On WSL, add below contents to &lt;code class=&quot;highlighter-rouge&quot;&gt;/etc/wsl.conf&lt;/code&gt;, if that file doesn’t exist,
+create a new one. You may need to restart WSL or Windows system in order to make
+the settings alive.&lt;/p&gt;
+
+&lt;div class=&quot;language-ini highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;nn&quot;&gt;[automount]&lt;/span&gt;
+&lt;span class=&quot;py&quot;&gt;options&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;&quot;metadata,umask=022&quot;&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p class=&quot;notice--info&quot;&gt;&lt;strong&gt;Tip:&lt;/strong&gt; For more information about WSL settings, please visit
+&lt;a href=&quot;https://docs.microsoft.com/en-us/windows/wsl/wsl-config#set-wsl-launch-settings&quot;&gt;here&lt;/a&gt;&lt;/p&gt;
+
+&lt;h4 id=&quot;for-newly-created-directories&quot;&gt;For newly created directories&lt;/h4&gt;
+
+&lt;p&gt;When you create a new file in an interactive shell, the file permission is given
+according to mask value. You  can check that value by running &lt;code class=&quot;highlighter-rouge&quot;&gt;umask&lt;/code&gt; in your
+shell. If the value is &lt;code class=&quot;highlighter-rouge&quot;&gt;0000&lt;/code&gt;, then it means the newly created directory will be
+given 777 permission (rwxrwxrwx).&lt;/p&gt;
+
+&lt;p&gt;There are two solutions for this issue.&lt;/p&gt;
+
+&lt;p&gt;The first solution is adding below contents to your &lt;code class=&quot;highlighter-rouge&quot;&gt;~/.bashrc&lt;/code&gt; or &lt;code class=&quot;highlighter-rouge&quot;&gt;~/.zshrc&lt;/code&gt;.&lt;/p&gt;
+
+&lt;div class=&quot;language-sh highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;nb&quot;&gt;umask &lt;/span&gt;002
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;The second solution is to ask &lt;code class=&quot;highlighter-rouge&quot;&gt;wsl.exe&lt;/code&gt; to launch a login shell through
+&lt;code class=&quot;highlighter-rouge&quot;&gt;/bin/login&lt;/code&gt;. Run below command in &lt;code class=&quot;highlighter-rouge&quot;&gt;cmd.exe&lt;/code&gt; or &lt;code class=&quot;highlighter-rouge&quot;&gt;powershell.exe&lt;/code&gt; or your
+favorite terminal, change the username to your own:&lt;/p&gt;
+
+&lt;div class=&quot;language-sh highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;wsl.exe &lt;span class=&quot;nt&quot;&gt;-u&lt;/span&gt; root &lt;span class=&quot;nt&quot;&gt;--&lt;/span&gt; /bin/login &lt;span class=&quot;nt&quot;&gt;-f&lt;/span&gt; username
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p class=&quot;notice--warning&quot;&gt;&lt;strong&gt;Note:&lt;/strong&gt; The side-effect is that specific paths will be removed from PATH
+environment variable.&lt;/p&gt;
+
+&lt;h3 id=&quot;windows-executables-paths-are-missing&quot;&gt;Windows executables PATHs are missing&lt;/h3&gt;
+
+&lt;p&gt;If you use the second solution from &lt;a href=&quot;#for-newly-created-directories&quot;&gt;here&lt;/a&gt;, or
+for some reason, you find some Windows executables PATHs are missing from WSL
+shell’s PATH environment variable. You can use below way to append Windows paths
+to PATH environment variable, so that you can call your favorite Windows
+executables from WSL.&lt;/p&gt;
+
+&lt;p&gt;Add below contents to your &lt;code class=&quot;highlighter-rouge&quot;&gt;~/.bashrc&lt;/code&gt; or &lt;code class=&quot;highlighter-rouge&quot;&gt;~/.zshrc&lt;/code&gt;:&lt;/p&gt;
+
+&lt;div class=&quot;language-sh highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;[[&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&quot;&lt;/span&gt;&lt;span class=&quot;si&quot;&gt;$(&lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;uname&lt;/span&gt; &lt;span class=&quot;nt&quot;&gt;-r&lt;/span&gt;&lt;span class=&quot;si&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;~ Microsoft&lt;span class=&quot;nv&quot;&gt;$ &lt;/span&gt;&lt;span class=&quot;o&quot;&gt;]]&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;then
+  &lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;_path&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&quot;&lt;/span&gt;&lt;span class=&quot;si&quot;&gt;$(&lt;/span&gt;/mnt/c/Windows/System32/cmd.exe /c &lt;span class=&quot;s2&quot;&gt;&quot;echo %PATH%&quot;&lt;/span&gt; | &lt;span class=&quot;nb&quot;&gt;tr&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&quot;;&quot;&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&quot;&lt;/span&gt;&lt;span class=&quot;se&quot;&gt;\n&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&quot;&lt;/span&gt; | &lt;span class=&quot;nb&quot;&gt;sed&lt;/span&gt; &lt;span class=&quot;nt&quot;&gt;-Ee&lt;/span&gt; &lt;span class=&quot;s1&quot;&gt;'s/^([C-Z]):/\/mnt\/\l\1/'&lt;/span&gt; &lt;span class=&quot;nt&quot;&gt;-e&lt;/span&gt; &lt;span class=&quot;s1&quot;&gt;'s/\\/\//g'&lt;/span&gt; | &lt;span class=&quot;nb&quot;&gt;tr&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&quot;&lt;/span&gt;&lt;span class=&quot;se&quot;&gt;\n&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&quot;&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&quot;:&quot;&lt;/span&gt;&lt;span class=&quot;si&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&quot;&lt;/span&gt;
+  &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;[[&lt;/span&gt; &lt;span class=&quot;nt&quot;&gt;-n&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&quot;&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;$_path&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;]]&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;then
+    &lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;PATH&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&quot;&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;$PATH&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;:&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;$_path&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&quot;&lt;/span&gt;
+  &lt;span class=&quot;k&quot;&gt;fi
+fi&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;h3 id=&quot;start-ssh-agent-automatically&quot;&gt;Start ssh-agent automatically&lt;/h3&gt;
+
+&lt;p&gt;If your private key is protected by a non-empty passphrase, you may need to
+input the passphrase every time you push to github or ssh into a machine. To
+avoid this, you can start ssh-agent once you open a terminal or start a new
+interactive shell. Add below contents to your &lt;code class=&quot;highlighter-rouge&quot;&gt;~/.bashrc&lt;/code&gt; or &lt;code class=&quot;highlighter-rouge&quot;&gt;~/.zshrc&lt;/code&gt;:&lt;/p&gt;
+
+&lt;div class=&quot;language-sh highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;c&quot;&gt;# Share a same ssh-agent across sessions.&lt;/span&gt;
+&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt; &lt;span class=&quot;nt&quot;&gt;-f&lt;/span&gt; ~/.ssh-agent.generated.env &lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;then&lt;/span&gt;
+  &lt;span class=&quot;nb&quot;&gt;.&lt;/span&gt; ~/.ssh-agent.generated.env &lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt;/dev/null
+  &lt;span class=&quot;c&quot;&gt;# If the $SSH_AGENT_PID is occupied by other process, we need to manually&lt;/span&gt;
+  &lt;span class=&quot;c&quot;&gt;# remove ~/.ssh-agent.generated.env.&lt;/span&gt;
+  &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;!&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;kill&lt;/span&gt; &lt;span class=&quot;nt&quot;&gt;-0&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;$SSH_AGENT_PID&lt;/span&gt; &amp;amp;&amp;gt;/dev/null&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;then&lt;/span&gt;
+    &lt;span class=&quot;c&quot;&gt;# Stale ssh-agent env file found. Spawn a new ssh-agent.&lt;/span&gt;
+    &lt;span class=&quot;nb&quot;&gt;eval&lt;/span&gt; &lt;span class=&quot;sb&quot;&gt;`&lt;/span&gt;ssh-agent | &lt;span class=&quot;nb&quot;&gt;tee&lt;/span&gt; ~/.ssh-agent.generated.env&lt;span class=&quot;sb&quot;&gt;`&lt;/span&gt;
+    ssh-add
+  &lt;span class=&quot;k&quot;&gt;fi
+else
+  &lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;eval&lt;/span&gt; &lt;span class=&quot;sb&quot;&gt;`&lt;/span&gt;ssh-agent | &lt;span class=&quot;nb&quot;&gt;tee&lt;/span&gt; ~/.ssh-agent.generated.env&lt;span class=&quot;sb&quot;&gt;`&lt;/span&gt;
+  ssh-add
+&lt;span class=&quot;k&quot;&gt;fi&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;h3 id=&quot;access-windows-clipboard-in-nvim-on-wsl&quot;&gt;Access Windows clipboard in nvim on WSL&lt;/h3&gt;
+
+&lt;p&gt;According to &lt;a href=&quot;https://github.com/neovim/neovim/wiki/FAQ#how-to-use-the-windows-clipboard-from-wsl&quot;&gt;this wiki&lt;/a&gt;, we can use
+&lt;a href=&quot;https://github.com/equalsraf/win32yank&quot;&gt;win32yank&lt;/a&gt; to access windows clipbard
+in nvim, but the steps are too many, and &lt;code class=&quot;highlighter-rouge&quot;&gt;win32yank.exe&lt;/code&gt; must be put outside of
+WSL rootfs in order to work. I only want to do a quick setup on WSL side. Here
+comes the dragon.&lt;/p&gt;
+
+&lt;p&gt;We can use &lt;code class=&quot;highlighter-rouge&quot;&gt;clip.exe&lt;/code&gt; that comes with Windows system to copy something to
+clipbard. To get from clipbard, Windows doesn’t provide such utility. We can use
+&lt;code class=&quot;highlighter-rouge&quot;&gt;powershell.exe -command Get-Clipboard&lt;/code&gt; to do that. But that costs too much time
+to run on WSL. So we need a more efficient way to implement that.&lt;/p&gt;
+
+&lt;p&gt;Here is a &lt;a href=&quot;https://github.com/uzxmx/pasteboard&quot;&gt;package&lt;/a&gt; that provides two
+commands &lt;code class=&quot;highlighter-rouge&quot;&gt;pbcopy.exe&lt;/code&gt; and &lt;code class=&quot;highlighter-rouge&quot;&gt;pbpaste.exe&lt;/code&gt;, which are much like OSX’s
+pbcopy/pbpaste. Install it through &lt;a href=&quot;https://scoop.sh/&quot;&gt;scoop&lt;/a&gt;.&lt;/p&gt;
+
+&lt;div class=&quot;language-sh highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;scoop &lt;span class=&quot;nb&quot;&gt;install &lt;/span&gt;https://raw.githubusercontent.com/uzxmx/scoop-extras/master/bucket/pasteboard.json
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;After the installation, make sure scoop shims are in $PATH. Run &lt;code class=&quot;highlighter-rouge&quot;&gt;type
+pbpaste.exe&lt;/code&gt; to check if it’s in $PATH. You may need to restart the terminal if
+$PATH doesn’t contain scoop shims.&lt;/p&gt;
+
+&lt;p&gt;Add below contents to your &lt;code class=&quot;highlighter-rouge&quot;&gt;~/.vimrc&lt;/code&gt;:&lt;/p&gt;
+
+&lt;div class=&quot;language-vim highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; system&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s1&quot;&gt;'uname -r'&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;=~&lt;/span&gt; &lt;span class=&quot;s1&quot;&gt;'Microsoft'&lt;/span&gt;
+  &lt;span class=&quot;k&quot;&gt;let&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;g:clipboard&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+&lt;span class=&quot;se&quot;&gt;    \&lt;/span&gt; &lt;span class=&quot;s1&quot;&gt;'name'&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;s1&quot;&gt;'WSLClipboard'&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;
+&lt;span class=&quot;se&quot;&gt;    \&lt;/span&gt; &lt;span class=&quot;s1&quot;&gt;'copy'&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+&lt;span class=&quot;se&quot;&gt;    \&lt;/span&gt;   &lt;span class=&quot;s1&quot;&gt;'+'&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;s1&quot;&gt;'clip.exe'&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;
+&lt;span class=&quot;se&quot;&gt;    \&lt;/span&gt;   &lt;span class=&quot;s1&quot;&gt;'*'&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;s1&quot;&gt;'clip.exe'&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;
+&lt;span class=&quot;se&quot;&gt;    \&lt;/span&gt;   &lt;span class=&quot;p&quot;&gt;},&lt;/span&gt;
+&lt;span class=&quot;se&quot;&gt;    \&lt;/span&gt; &lt;span class=&quot;s1&quot;&gt;'paste'&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+&lt;span class=&quot;se&quot;&gt;    \&lt;/span&gt;   &lt;span class=&quot;s1&quot;&gt;'+'&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;s1&quot;&gt;'pbpaste.exe --lf'&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;
+&lt;span class=&quot;se&quot;&gt;    \&lt;/span&gt;   &lt;span class=&quot;s1&quot;&gt;'*'&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;s1&quot;&gt;'pbpaste.exe --lf'&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;
+&lt;span class=&quot;se&quot;&gt;    \&lt;/span&gt;   &lt;span class=&quot;p&quot;&gt;},&lt;/span&gt;
+&lt;span class=&quot;se&quot;&gt;    \&lt;/span&gt; &lt;span class=&quot;s1&quot;&gt;'cache_enabled'&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;m&quot;&gt;1&lt;/span&gt;
+&lt;span class=&quot;se&quot;&gt;    \&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+&lt;span class=&quot;k&quot;&gt;endif&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p class=&quot;notice--info&quot;&gt;&lt;strong&gt;Tip:&lt;/strong&gt; For more information about &lt;code class=&quot;highlighter-rouge&quot;&gt;g:clipboard&lt;/code&gt; in nvim, run &lt;code class=&quot;highlighter-rouge&quot;&gt;:h g:clipboard&lt;/code&gt;.&lt;/p&gt;
+
+&lt;p&gt;Reopen nvim. This time, when you press &lt;code class=&quot;highlighter-rouge&quot;&gt;y&lt;/code&gt; to yank, the text should go to
+clipboard, and when pressing &lt;code class=&quot;highlighter-rouge&quot;&gt;p&lt;/code&gt; to paste, the content of clipboard should be
+pasted.&lt;/p&gt;
+
+&lt;h3 id=&quot;open-directory-or-url-from-wsl&quot;&gt;Open directory or URL from WSL&lt;/h3&gt;
+
+&lt;p&gt;If you have used much CLI in OSX system, you must be familiar with &lt;code class=&quot;highlighter-rouge&quot;&gt;open&lt;/code&gt;
+command. It can open a file or directory in Finder window, also can open a web
+page if the parameter is with HTTP schema. So how to do these on WSL? Here’re
+some examples that show how to do that.&lt;/p&gt;
+
+&lt;div class=&quot;language-sh highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;cmd.exe /c &lt;span class=&quot;s2&quot;&gt;&quot;start explorer.exe C:&lt;/span&gt;&lt;span class=&quot;se&quot;&gt;\\&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;Windows&quot;&lt;/span&gt;
+cmd.exe /c &lt;span class=&quot;s2&quot;&gt;&quot;start explorer.exe C:&lt;/span&gt;&lt;span class=&quot;se&quot;&gt;\\&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;Users&quot;&lt;/span&gt;
+
+cmd.exe /c start &lt;span class=&quot;s2&quot;&gt;&quot;http://example.com&quot;&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p class=&quot;notice--warning&quot;&gt;&lt;strong&gt;Note:&lt;/strong&gt; The directory passed to &lt;code class=&quot;highlighter-rouge&quot;&gt;explorer.exe&lt;/code&gt; must be Windows path (not WSL
+path like /mnt/c/Windows). To open a browser, the parameter must be with
+&lt;code class=&quot;highlighter-rouge&quot;&gt;http://&lt;/code&gt; or &lt;code class=&quot;highlighter-rouge&quot;&gt;https://&lt;/code&gt; prefix.&lt;/p&gt;
+
+&lt;p&gt;For a full convenient script, you can reference the bash script
+&lt;a href=&quot;https://github.com/uzxmx/dotfiles/blob/master/bin/open&quot;&gt;open&lt;/a&gt; which
+imitates OSX’s open.&lt;/p&gt;
+
+&lt;h3 id=&quot;remove-ugly-green-background-for-directories&quot;&gt;Remove ugly green background for directories&lt;/h3&gt;
+
+&lt;p&gt;A color init string consists of one or more numeric codes, seperated by &lt;code class=&quot;highlighter-rouge&quot;&gt;;&lt;/code&gt;. For
+example:&lt;/p&gt;
+
+&lt;div class=&quot;highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;OTHER_WRITABLE 34;42
+EXEC 00;31
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;Below are all numeric codes:&lt;/p&gt;
+
+&lt;div class=&quot;highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;Attribute codes:
+00=none 01=bold 04=underscore 05=blink 07=reverse 08=concealed
+
+Text color codes:
+30=black 31=red 32=green 33=yellow 34=blue 35=magenta 36=cyan 37=white
+
+Background color codes:
+40=black 41=red 42=green 43=yellow 44=blue 45=magenta 46=cyan 47=white
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;For &lt;code class=&quot;highlighter-rouge&quot;&gt;OTHER_WRITABLE 34;42&lt;/code&gt;, it means o+w directory has blue text and green
+background. For &lt;code class=&quot;highlighter-rouge&quot;&gt;EXEC 00;31&lt;/code&gt;, it means executable file has red text, with no
+attribute and no background.&lt;/p&gt;
+
+&lt;p&gt;In order to update the color, we first generate default colors by executing:&lt;/p&gt;
+
+&lt;div class=&quot;language-sh highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;nb&quot;&gt;dircolors&lt;/span&gt; &lt;span class=&quot;nt&quot;&gt;-p&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt;~/.dircolors
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;Then open &lt;code class=&quot;highlighter-rouge&quot;&gt;~/.dircolors&lt;/code&gt;, change the color of the target type. For example,
+change color of &lt;code class=&quot;highlighter-rouge&quot;&gt;OTHER_WRITABLE&lt;/code&gt; from &lt;code class=&quot;highlighter-rouge&quot;&gt;34;42&lt;/code&gt;  to &lt;code class=&quot;highlighter-rouge&quot;&gt;00;34&lt;/code&gt;, the background will
+be removed.&lt;/p&gt;
+
+&lt;p&gt;After changing any color, add below content to your &lt;code class=&quot;highlighter-rouge&quot;&gt;~/.bashrc&lt;/code&gt; or &lt;code class=&quot;highlighter-rouge&quot;&gt;~/.zshrc&lt;/code&gt;:&lt;/p&gt;
+
+&lt;div class=&quot;language-sh highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;nb&quot;&gt;eval&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&quot;&lt;/span&gt;&lt;span class=&quot;si&quot;&gt;$(&lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;dircolors&lt;/span&gt; ~/.dircolors&lt;span class=&quot;si&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&quot;&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;For Zsh user, you also need to add below content to make the color normal when
+auto-completing.&lt;/p&gt;
+
+&lt;div class=&quot;language-zsh highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;zstyle &lt;span class=&quot;s1&quot;&gt;':completion:*'&lt;/span&gt; list-colors &lt;span class=&quot;k&quot;&gt;${&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(s.&lt;/span&gt;:.&lt;span class=&quot;p&quot;&gt;)LS_COLORS&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;}&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;Then start a new shell. You shouldn’t see ugly green background any more.&lt;/p&gt;
+
+&lt;h3 id=&quot;use-vagrant&quot;&gt;Use vagrant&lt;/h3&gt;
+
+&lt;p&gt;Vagrant &lt;a href=&quot;https://www.vagrantup.com/docs/other/wsl.html#windows-access&quot;&gt;supports&lt;/a&gt;
+WSL, but some of Vagrantfile and plugins may not support it. For example, if you
+use &lt;code class=&quot;highlighter-rouge&quot;&gt;ubuntu/bionic64&lt;/code&gt; box, in &lt;code class=&quot;highlighter-rouge&quot;&gt;~/.vagrant.d/boxes/ubuntu-VAGRANTSLASH-bionic64/0/virtualbox&lt;/code&gt;
+there is a line shown below:&lt;/p&gt;
+
+&lt;div class=&quot;language-rb highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;n&quot;&gt;vb&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;customize&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;[&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&quot;modifyvm&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;ss&quot;&gt;:id&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&quot;--uartmode1&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&quot;file&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;no&quot;&gt;File&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;join&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;no&quot;&gt;Dir&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;nf&quot;&gt;pwd&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&quot;ubuntu-bionic-18.04-cloudimg-console.log&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;]&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;The above line will stop vagrant working on WSL. Because it sets a WSL path in
+Virtualbox, but Virtualbox cannot find that path, we must convert the WSL path
+to Windows path so that it can work. There is also a quick workaround
+&lt;a href=&quot;https://github.com/hashicorp/vagrant/issues/8604&quot;&gt;here&lt;/a&gt;. &lt;del&gt;For such reason, I
+suggest not to use vagrant on WSL. Instead, use vagrant on Windows directly.&lt;/del&gt;
+Because I use &lt;code class=&quot;highlighter-rouge&quot;&gt;centos/7&lt;/code&gt; as my base box, unlike &lt;code class=&quot;highlighter-rouge&quot;&gt;ubuntu/bionic64&lt;/code&gt; it works well
+on WSL, so I still insist on using vagrant on WSL.&lt;/p&gt;
+
+&lt;p&gt;When using vagrant on WSL or Windows, the vagrant project should exist outside of WSL
+rootfs so that virtualbox or vagrant can find the correct path.&lt;/p&gt;
+
+&lt;h4 id=&quot;kernel-panic---not-syncing&quot;&gt;Kernel panic - not syncing&lt;/h4&gt;
+
+&lt;p&gt;If you run Vagrant Centos/7 box, you may experience an error &lt;a href=&quot;https://forums.virtualbox.org/viewtopic.php?f=3&amp;amp;t=93990&quot;&gt;Kernel panic - not
+syncing&lt;/a&gt; on Virtualbox
+6.0.8. A workaround is to use Virtualbox 6.0.6. I haven’t tried if it works in
+the latest version.&lt;/p&gt;
+
+&lt;h4 id=&quot;agent-forwarding-issue&quot;&gt;Agent forwarding issue&lt;/h4&gt;
+
+&lt;p&gt;This issue only appears when using vagrant on Windows (not WSL). When we run
+vagrant, it cannot find ssh agent inside WSL, so ssh agent forwarding may not
+work. As a workaround, we can use ssh directly.&lt;/p&gt;
+
+&lt;div class=&quot;language-sh highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;c&quot;&gt;# This one will not work.&lt;/span&gt;
+vagrant ssh &lt;span class=&quot;nt&quot;&gt;--&lt;/span&gt; &lt;span class=&quot;nt&quot;&gt;-A&lt;/span&gt;
+
+&lt;span class=&quot;c&quot;&gt;# This one will work. Replace the port with the correct port which will be&lt;/span&gt;
+&lt;span class=&quot;c&quot;&gt;# shown when you run `vagrant up` or `vagrant ssh-config`. Below line&lt;/span&gt;
+&lt;span class=&quot;c&quot;&gt;# assumes the current working directory is vagrant project root directory,&lt;/span&gt;
+&lt;span class=&quot;c&quot;&gt;# you may need to ensure the private_key file has correct permission.&lt;/span&gt;
+ssh vagrant@localhost &lt;span class=&quot;nt&quot;&gt;-p&lt;/span&gt; port &lt;span class=&quot;nt&quot;&gt;-i&lt;/span&gt; .vagrant/machines/default/virtualbox/private_key &lt;span class=&quot;nt&quot;&gt;-A&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;</content><author><name></name></author><summary type="html">This post shares some WSL (Windows Subsystem for Linux) tricks. The Windows Subsystem for Linux lets developers run a GNU/Linux environment – including most command-line tools, utilities, and applications – directly on Windows, unmodified, without the overhead of a virtual machine.</summary></entry></feed>

@@ -1,0 +1,460 @@
+<!doctype html>
+<!--
+  Minimal Mistakes Jekyll Theme 4.19.1 by Michael Rose
+  Copyright 2013-2019 Michael Rose - mademistakes.com | @mmistakes
+  Free for personal and commercial use under the MIT license
+  https://github.com/mmistakes/minimal-mistakes/blob/master/LICENSE
+-->
+<html lang="en" class="no-js">
+  <head>
+    <meta charset="utf-8">
+
+<!-- begin _includes/seo.html --><title>Prometheus scrape internals - Mingxiang’s blog</title>
+<meta name="description" content="Scrape is an action that Prometheus server fetches metrics data from a list of configured targets. The targets are also called exporters.  ">
+
+
+
+<meta property="og:type" content="article">
+<meta property="og:locale" content="en_US">
+<meta property="og:site_name" content="Mingxiang's blog">
+<meta property="og:title" content="Prometheus scrape internals">
+<meta property="og:url" content="https://uzxmx.github.io/prometheus-scrape-internals.html">
+
+
+  <meta property="og:description" content="Scrape is an action that Prometheus server fetches metrics data from a list of configured targets. The targets are also called exporters.  ">
+
+
+
+
+
+
+
+  <meta property="article:published_time" content="2020-05-24T16:17:00+08:00">
+
+
+
+
+
+
+<link rel="canonical" href="https://uzxmx.github.io/prometheus-scrape-internals.html">
+
+
+
+
+<script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    
+      "@type": "Person",
+      "name": null,
+      "url": "https://uzxmx.github.io/"
+    
+  }
+</script>
+
+
+  <meta name="google-site-verification" content="4cV_DkFkOihbmPCkF3LqIVBC3lM0yA0UhentAgp7Mmg" />
+
+
+  <meta name="msvalidate.01" content="E2FD20A4199C5CDBE9E4842CCD5820E0">
+
+
+
+
+<!-- end _includes/seo.html -->
+
+
+<link href="/feed.xml" type="application/atom+xml" rel="alternate" title="Mingxiang's blog Feed">
+
+<!-- https://t.co/dKP3o1e -->
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<script>
+  document.documentElement.className = document.documentElement.className.replace(/\bno-js\b/g, '') + ' js ';
+</script>
+
+<!-- For all browsers -->
+<link rel="stylesheet" href="/assets/css/main.css">
+
+<!--[if IE]>
+  <style>
+    /* old IE unsupported flexbox fixes */
+    .greedy-nav .site-title {
+      padding-right: 3em;
+    }
+    .greedy-nav button {
+      position: absolute;
+      top: 0;
+      right: 0;
+      height: 100%;
+    }
+  </style>
+<![endif]-->
+
+
+
+    <link href="/assets/styles/snippet.css" rel="stylesheet" type="text/css">
+
+  </head>
+
+  <body class="layout--single">
+    <nav class="skip-links">
+  <h2 class="screen-reader-text">Skip links</h2>
+  <ul>
+    <li><a href="#site-nav" class="screen-reader-shortcut">Skip to primary navigation</a></li>
+    <li><a href="#main" class="screen-reader-shortcut">Skip to content</a></li>
+    <li><a href="#footer" class="screen-reader-shortcut">Skip to footer</a></li>
+  </ul>
+</nav>
+
+    <!--[if lt IE 9]>
+<div class="notice--danger align-center" style="margin: 0;">You are using an <strong>outdated</strong> browser. Please <a href="https://browsehappy.com/">upgrade your browser</a> to improve your experience.</div>
+<![endif]-->
+
+    
+
+<div class="masthead">
+  <div class="masthead__inner-wrap">
+    <div class="masthead__menu">
+      <nav id="site-nav" class="greedy-nav">
+        
+        <a class="site-title" href="/">
+          Mingxiang's blog
+          
+        </a>
+        <ul class="visible-links"></ul>
+        
+        <button class="greedy-nav__toggle hidden" type="button">
+          <span class="visually-hidden">Toggle menu</span>
+          <div class="navicon"></div>
+        </button>
+        <ul class="hidden-links hidden"></ul>
+      </nav>
+    </div>
+  </div>
+</div>
+
+
+    <div class="initial-content">
+      
+
+
+
+<div id="main" role="main">
+  
+
+
+  <article class="page" itemscope itemtype="https://schema.org/CreativeWork">
+    <meta itemprop="headline" content="Prometheus scrape internals">
+    <meta itemprop="description" content="Scrape is an action that Prometheus server fetches metrics data from a list ofconfigured targets. The targets are also called exporters.">
+    <meta itemprop="datePublished" content="2020-05-24T16:17:00+08:00">
+    
+
+    <div class="page__inner-wrap">
+      
+        <header>
+          <h1 id="page-title" class="page__title" itemprop="headline">Prometheus scrape internals
+</h1>
+          
+            <p class="page__meta"><i class="far fa-clock" aria-hidden="true"></i> 
+
+
+
+
+  3 minute read
+
+</p>
+          
+        </header>
+      
+
+      <section class="page__content" itemprop="text">
+        
+          <aside class="sidebar__right sticky">
+            <nav class="toc">
+              <header><h4 class="nav__title"><i class="fas fa-file-alt"></i> On this page</h4></header>
+              <ul class="toc__menu">
+  <li><a href="#scrape-discovery-manager">Scrape discovery manager</a></li>
+  <li><a href="#scrape-manager">Scrape manager</a>
+    <ul>
+      <li><a href="#scrape-a-target">Scrape a target</a></li>
+      <li><a href="#parse-scrape-response">Parse scrape response</a></li>
+      <li><a href="#append-samples-to-the-head">Append samples to the head</a></li>
+    </ul>
+  </li>
+</ul>
+
+            </nav>
+          </aside>
+        
+        <p>Scrape is an action that Prometheus server fetches metrics data from a list of
+configured targets. The targets are also called exporters.</p>
+
+<h2 id="scrape-discovery-manager">Scrape discovery manager</h2>
+
+<p>The scrape discovery manager is actually the service discovery manager. Here,
+finding the scrape targets is the same meaning as discovering services.</p>
+
+<p>At the beginning, the discovery manager starts a goroutine called <code class="highlighter-rouge">sender</code> which
+is responsible for sending all groups of targets to an exported channel, where the
+clients are waiting to receive. The sender repeatedly waits on a <code class="highlighter-rouge">triggerSend</code>
+channel, if a signal is received, it then signals the clients.</p>
+
+<p>After loading configuration, <code class="highlighter-rouge">discovery.Manager.ApplyConfig</code> will be called. It
+iterates over a map with job name and <code class="highlighter-rouge">ServiceDiscoveryConfig</code> pair
+(Interestingly, <code class="highlighter-rouge">StaticConfigs</code> is also a field of <code class="highlighter-rouge">ServiceDiscoveryConfig</code>
+struct), register each <code class="highlighter-rouge">SDConfig</code> (except <code class="highlighter-rouge">StaticConfigs</code>) as a provider, and each
+provider owns a field that implements <code class="highlighter-rouge">Discoverer</code> interface. For
+<code class="highlighter-rouge">StaticConfigs</code>, it creates a <code class="highlighter-rouge">StaticProvider</code>, and make it act as a
+<code class="highlighter-rouge">Discoverer</code> by returning groups of targets directly.</p>
+
+<p><code class="highlighter-rouge">Discoverer</code> interface provides information about target groups. It maintains a set
+of sources from which <code class="highlighter-rouge">TargetGroups</code> can originate. Whenever a discovery provider
+detects a potential change, it sends the <code class="highlighter-rouge">TargetGroup</code> through its channel.</p>
+
+<figure class="highlight">
+  <div class="snippet-header">
+    <div class="snippet-name"><span>discovery/manager.go</span></div>
+    <div class="snippet-actions">
+      <button class="snippet-action-copy" data-snippet="dHlwZSBEaXNjb3ZlcmVyIGludGVyZmFjZSB7CglSdW4oY3R4IGNvbnRleHQu
+Q29udGV4dCwgdXAgY2hhbjwtIFtdKnRhcmdldGdyb3VwLkdyb3VwKQp9
+"></button>
+    </div>
+  </div>
+  <pre><code class="language-golang" data-lang="golang"><span class="k">type</span> <span class="n">Discoverer</span> <span class="k">interface</span> <span class="p">{</span>
+	<span class="n">Run</span><span class="p">(</span><span class="n">ctx</span> <span class="n">context</span><span class="o">.</span><span class="n">Context</span><span class="p">,</span> <span class="n">up</span> <span class="k">chan</span><span class="o">&lt;-</span> <span class="p">[]</span><span class="o">*</span><span class="n">targetgroup</span><span class="o">.</span><span class="n">Group</span><span class="p">)</span>
+<span class="p">}</span></code></pre>
+</figure>
+
+<p>The discovery manager then starts each of providers. It starts a goroutine to
+run <code class="highlighter-rouge">Discoverer</code>, and another goroutine to update groups of targets and trigger
+<code class="highlighter-rouge">sender</code> to send all groups of targets.</p>
+
+<h2 id="scrape-manager">Scrape manager</h2>
+
+<p>At first, the scrape manager starts a goroutine to repeatedly wait to receive
+from an internal <code class="highlighter-rouge">triggerReload</code> channel in order to reload. It then repeatedly
+waits to receive from a target sets channel to which <a href="#scrape-discovery-manager">scrape discovery
+manager</a> sends. When target sets are updated, the
+scrape manager will send a signal to <code class="highlighter-rouge">triggerReload</code> channel to do reloading
+stuff.</p>
+
+<p>On reloading, it iterates over the target sets to check if a <code class="highlighter-rouge">scrapePoll</code> with
+the set name as key exists. If it doesn’t exist, it creates one. It then starts
+a goroutine to execute <code class="highlighter-rouge">scrapePoll.Sync()</code> to scrape groups of targets. For each
+target, it creates a scrape loop, starts a goroutine to execute scrape loop’s
+<code class="highlighter-rouge">run</code> method, which will repeatedly scrape that target, parse scrape response,
+and append samples to the head.</p>
+
+<h3 id="scrape-a-target">Scrape a target</h3>
+
+<p>Package <code class="highlighter-rouge">scrape</code> provides a <code class="highlighter-rouge">targetScraper</code> struct which implements scraper
+interface for a target. When scraping, it checks if an http request has been
+created, if created, reuses it, otherwise creates a new one. It then sends the
+request to the http client to execute.</p>
+
+<figure class="highlight">
+  <div class="snippet-header">
+    <div class="snippet-name"><span>scrape/scrape.go</span></div>
+    <div class="snippet-actions">
+      <button class="snippet-action-copy" data-snippet="dHlwZSB0YXJnZXRTY3JhcGVyIHN0cnVjdCB7CgkqVGFyZ2V0CgoJY2xpZW50
+ICAqaHR0cC5DbGllbnQKCXJlcSAgICAgKmh0dHAuUmVxdWVzdAoJdGltZW91
+dCB0aW1lLkR1cmF0aW9uCgoJZ3ppcHIgKmd6aXAuUmVhZGVyCglidWYgICAq
+YnVmaW8uUmVhZGVyCn0=
+"></button>
+    </div>
+  </div>
+  <pre><code class="language-golang" data-lang="golang"><table class="rouge-table"><tbody><tr><td class="gutter gl"><pre class="lineno">521
+522
+523
+524
+525
+526
+527
+528
+529
+530
+</pre></td><td class="code"><pre><span class="k">type</span> <span class="n">targetScraper</span> <span class="k">struct</span> <span class="p">{</span>
+	<span class="o">*</span><span class="n">Target</span>
+
+	<span class="n">client</span>  <span class="o">*</span><span class="n">http</span><span class="o">.</span><span class="n">Client</span>
+	<span class="n">req</span>     <span class="o">*</span><span class="n">http</span><span class="o">.</span><span class="n">Request</span>
+	<span class="n">timeout</span> <span class="n">time</span><span class="o">.</span><span class="n">Duration</span>
+
+	<span class="n">gzipr</span> <span class="o">*</span><span class="n">gzip</span><span class="o">.</span><span class="n">Reader</span>
+	<span class="n">buf</span>   <span class="o">*</span><span class="n">bufio</span><span class="o">.</span><span class="n">Reader</span>
+<span class="p">}</span>
+</pre></td></tr></tbody></table></code></pre>
+</figure>
+
+<h3 id="parse-scrape-response">Parse scrape response</h3>
+
+<p>During a scrape, a scrape target is expected to export a list of data items that
+conforms to some format. Each data item begins with a <code class="highlighter-rouge">HELP</code> line, followed by a
+<code class="highlighter-rouge">TYPE</code> line and a <code class="highlighter-rouge">UNIT</code> line, and ends with one or more metric lines
+(<code class="highlighter-rouge">samples</code>). Each metric line is called a <code class="highlighter-rouge">sample</code>. A <code class="highlighter-rouge">sample</code> is composed of a
+<code class="highlighter-rouge">series</code>, a metric value and an optional timestamp. A <code class="highlighter-rouge">series</code> is composed of
+the metric name and optional labels.</p>
+
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code># HELP &lt;metric_name&gt; &lt;description&gt;
+# TYPE &lt;metric_name&gt; &lt;metric_type&gt;
+# UNIT &lt;metric_name&gt; &lt;metric_unit&gt;
+&lt;metric_name&gt;{&lt;labels&gt;} &lt;metric_value&gt; [timestamp]
+&lt;metric_name&gt;{&lt;labels&gt;} &lt;metric_value&gt; [timestamp]
+...
+</code></pre></div></div>
+
+<p>For example, below is the partial of an http response from node exporter.</p>
+
+<figure class="highlight">
+  <div class="snippet-header">
+    <div class="snippet-name"><span></span></div>
+    <div class="snippet-actions">
+      <button class="snippet-action-copy" data-snippet="IyBIRUxQIG5vZGVfY3B1X3NlY29uZHNfdG90YWwgU2Vjb25kcyB0aGUgY3B1
+cyBzcGVudCBpbiBlYWNoIG1vZGUuCiMgVFlQRSBub2RlX2NwdV9zZWNvbmRz
+X3RvdGFsIGNvdW50ZXIKbm9kZV9jcHVfc2Vjb25kc190b3RhbHtjcHU9IjAi
+LG1vZGU9InN5c3RlbSJ9IDQ1MC41MQpub2RlX2NwdV9zZWNvbmRzX3RvdGFs
+e2NwdT0iMCIsbW9kZT0idXNlciJ9IDE0MjYuNDQKbm9kZV9jcHVfc2Vjb25k
+c190b3RhbHtjcHU9IjEiLG1vZGU9InN5c3RlbSJ9IDQxNi41Cm5vZGVfY3B1
+X3NlY29uZHNfdG90YWx7Y3B1PSIxIixtb2RlPSJ1c2VyIn0gMTQ1Ni44NQoj
+IEhFTFAgbm9kZV9tZW1vcnlfQWN0aXZlX2J5dGVzIE1lbW9yeSBpbmZvcm1h
+dGlvbiBmaWVsZCBBY3RpdmVfYnl0ZXMuCiMgVFlQRSBub2RlX21lbW9yeV9B
+Y3RpdmVfYnl0ZXMgZ2F1Z2UKbm9kZV9tZW1vcnlfQWN0aXZlX2J5dGVzIDUu
+MDY4NzAxNjk2ZSswOQ==
+"></button>
+    </div>
+  </div>
+  <pre><code class="language-conf" data-lang="conf"><span class="c"># HELP node_cpu_seconds_total Seconds the cpus spent in each mode.
+# TYPE node_cpu_seconds_total counter
+</span><span class="n">node_cpu_seconds_total</span>{<span class="n">cpu</span>=<span class="s2">"0"</span>,<span class="n">mode</span>=<span class="s2">"system"</span>} <span class="m">450</span>.<span class="m">51</span>
+<span class="n">node_cpu_seconds_total</span>{<span class="n">cpu</span>=<span class="s2">"0"</span>,<span class="n">mode</span>=<span class="s2">"user"</span>} <span class="m">1426</span>.<span class="m">44</span>
+<span class="n">node_cpu_seconds_total</span>{<span class="n">cpu</span>=<span class="s2">"1"</span>,<span class="n">mode</span>=<span class="s2">"system"</span>} <span class="m">416</span>.<span class="m">5</span>
+<span class="n">node_cpu_seconds_total</span>{<span class="n">cpu</span>=<span class="s2">"1"</span>,<span class="n">mode</span>=<span class="s2">"user"</span>} <span class="m">1456</span>.<span class="m">85</span>
+<span class="c"># HELP node_memory_Active_bytes Memory information field Active_bytes.
+# TYPE node_memory_Active_bytes gauge
+</span><span class="n">node_memory_Active_bytes</span> <span class="m">5</span>.<span class="m">068701696</span><span class="n">e</span>+<span class="m">09</span></code></pre>
+</figure>
+
+<h3 id="append-samples-to-the-head">Append samples to the head</h3>
+
+<p>When the scrape manager is created, it’s initialized with a fanout storage. So
+when appending samples, it actually uses the <code class="highlighter-rouge">storage.Appender</code> provided by the
+fanout storage. Let’s ignore remote storage for now, only consider local
+storage. The local storage <code class="highlighter-rouge">DB</code> uses <code class="highlighter-rouge">headAppender</code> as the implementation, so
+samples are finally appended through <code class="highlighter-rouge">headAppender</code>.</p>
+
+<figure class="highlight">
+  <div class="snippet-header">
+    <div class="snippet-name"><span>tsdb/db.go</span></div>
+    <div class="snippet-actions">
+      <button class="snippet-action-copy" data-snippet="ZnVuYyAoZGIgKkRCKSBBcHBlbmRlcigpIHN0b3JhZ2UuQXBwZW5kZXIgewoJ
+cmV0dXJuIGRiQXBwZW5kZXJ7ZGI6IGRiLCBBcHBlbmRlcjogZGIuaGVhZC5B
+cHBlbmRlcigpfQp9Cgp0eXBlIGRiQXBwZW5kZXIgc3RydWN0IHsKCXN0b3Jh
+Z2UuQXBwZW5kZXIKCWRiICpEQgp9
+"></button>
+    </div>
+  </div>
+  <pre><code class="language-golang" data-lang="golang"><table class="rouge-table"><tbody><tr><td class="gutter gl"><pre class="lineno">683
+684
+685
+686
+687
+688
+689
+690
+</pre></td><td class="code"><pre><span class="k">func</span> <span class="p">(</span><span class="n">db</span> <span class="o">*</span><span class="n">DB</span><span class="p">)</span> <span class="n">Appender</span><span class="p">()</span> <span class="n">storage</span><span class="o">.</span><span class="n">Appender</span> <span class="p">{</span>
+	<span class="k">return</span> <span class="n">dbAppender</span><span class="p">{</span><span class="n">db</span><span class="o">:</span> <span class="n">db</span><span class="p">,</span> <span class="n">Appender</span><span class="o">:</span> <span class="n">db</span><span class="o">.</span><span class="n">head</span><span class="o">.</span><span class="n">Appender</span><span class="p">()}</span>
+<span class="p">}</span>
+
+<span class="k">type</span> <span class="n">dbAppender</span> <span class="k">struct</span> <span class="p">{</span>
+	<span class="n">storage</span><span class="o">.</span><span class="n">Appender</span>
+	<span class="n">db</span> <span class="o">*</span><span class="n">DB</span>
+<span class="p">}</span>
+</pre></td></tr></tbody></table></code></pre>
+</figure>
+
+<p>When all samples from a scrape are added, it calls <code class="highlighter-rouge">Commit</code>. When committing, it
+firstly writes ahead log, then it iterates over samples, and appends each sample
+to the corresponding memory series. If some error happens, it will call <code class="highlighter-rouge">Rollback</code>.</p>
+
+        
+      </section>
+
+      <footer class="page__meta">
+        
+        
+
+
+        
+          <p class="page__date"><strong><i class="fas fa-fw fa-calendar-alt" aria-hidden="true"></i> Updated:</strong> <time datetime="2020-05-24T16:17:00+08:00">May 24, 2020</time></p>
+        
+      </footer>
+
+      
+
+      
+  <nav class="pagination">
+    
+      <a href="/prometheus-bootstrap-internals.html" class="pagination--pager" title="Prometheus bootstrap internals
+">Previous</a>
+    
+    
+      <a href="/prometheus-tsdb-internals.html" class="pagination--pager" title="Prometheus TSDB internals
+">Next</a>
+    
+  </nav>
+
+    </div>
+
+    
+  </article>
+
+  
+  
+</div>
+
+    </div>
+
+    
+
+    <div id="footer" class="page__footer">
+      <footer>
+        <!-- start custom footer snippets -->
+
+<!-- end custom footer snippets -->
+        <div class="page__footer-follow">
+  <ul class="social-icons">
+    
+
+    
+
+    <li><a href="/feed.xml"><i class="fas fa-fw fa-rss-square" aria-hidden="true"></i> Feed</a></li>
+  </ul>
+</div>
+
+<div class="page__footer-copyright">&copy; 2020 Mingxiang's blog. Powered by <a href="https://jekyllrb.com" rel="nofollow">Jekyll</a> &amp; <a href="https://mademistakes.com/work/minimal-mistakes-jekyll-theme/" rel="nofollow">Minimal Mistakes</a>.</div>
+
+      </footer>
+    </div>
+
+    
+  
+    <script src="/assets/scripts/snippet.js"></script>
+  
+
+
+
+
+
+
+
+    
+
+
+
+
+
+
+
+  </body>
+</html>

@@ -1,0 +1,548 @@
+<!doctype html>
+<!--
+  Minimal Mistakes Jekyll Theme 4.19.1 by Michael Rose
+  Copyright 2013-2019 Michael Rose - mademistakes.com | @mmistakes
+  Free for personal and commercial use under the MIT license
+  https://github.com/mmistakes/minimal-mistakes/blob/master/LICENSE
+-->
+<html lang="en" class="no-js">
+  <head>
+    <meta charset="utf-8">
+
+<!-- begin _includes/seo.html --><title>WSL tricks - Mingxiang’s blog</title>
+<meta name="description" content="This post shares some WSL (Windows Subsystem for Linux) tricks. The Windows Subsystem for Linux lets developers run a GNU/Linux environment – including most command-line tools, utilities, and applications – directly on Windows, unmodified, without the overhead of a virtual machine.  ">
+
+
+
+<meta property="og:type" content="article">
+<meta property="og:locale" content="en_US">
+<meta property="og:site_name" content="Mingxiang's blog">
+<meta property="og:title" content="WSL tricks">
+<meta property="og:url" content="https://uzxmx.github.io/wsl-tricks.html">
+
+
+  <meta property="og:description" content="This post shares some WSL (Windows Subsystem for Linux) tricks. The Windows Subsystem for Linux lets developers run a GNU/Linux environment – including most command-line tools, utilities, and applications – directly on Windows, unmodified, without the overhead of a virtual machine.  ">
+
+
+
+
+
+
+
+  <meta property="article:published_time" content="2020-04-11T19:37:24+08:00">
+
+
+
+
+
+
+<link rel="canonical" href="https://uzxmx.github.io/wsl-tricks.html">
+
+
+
+
+<script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    
+      "@type": "Person",
+      "name": null,
+      "url": "https://uzxmx.github.io/"
+    
+  }
+</script>
+
+
+  <meta name="google-site-verification" content="4cV_DkFkOihbmPCkF3LqIVBC3lM0yA0UhentAgp7Mmg" />
+
+
+  <meta name="msvalidate.01" content="E2FD20A4199C5CDBE9E4842CCD5820E0">
+
+
+
+
+<!-- end _includes/seo.html -->
+
+
+<link href="/feed.xml" type="application/atom+xml" rel="alternate" title="Mingxiang's blog Feed">
+
+<!-- https://t.co/dKP3o1e -->
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<script>
+  document.documentElement.className = document.documentElement.className.replace(/\bno-js\b/g, '') + ' js ';
+</script>
+
+<!-- For all browsers -->
+<link rel="stylesheet" href="/assets/css/main.css">
+
+<!--[if IE]>
+  <style>
+    /* old IE unsupported flexbox fixes */
+    .greedy-nav .site-title {
+      padding-right: 3em;
+    }
+    .greedy-nav button {
+      position: absolute;
+      top: 0;
+      right: 0;
+      height: 100%;
+    }
+  </style>
+<![endif]-->
+
+
+
+    <link href="/assets/styles/snippet.css" rel="stylesheet" type="text/css">
+
+  </head>
+
+  <body class="layout--single">
+    <nav class="skip-links">
+  <h2 class="screen-reader-text">Skip links</h2>
+  <ul>
+    <li><a href="#site-nav" class="screen-reader-shortcut">Skip to primary navigation</a></li>
+    <li><a href="#main" class="screen-reader-shortcut">Skip to content</a></li>
+    <li><a href="#footer" class="screen-reader-shortcut">Skip to footer</a></li>
+  </ul>
+</nav>
+
+    <!--[if lt IE 9]>
+<div class="notice--danger align-center" style="margin: 0;">You are using an <strong>outdated</strong> browser. Please <a href="https://browsehappy.com/">upgrade your browser</a> to improve your experience.</div>
+<![endif]-->
+
+    
+
+<div class="masthead">
+  <div class="masthead__inner-wrap">
+    <div class="masthead__menu">
+      <nav id="site-nav" class="greedy-nav">
+        
+        <a class="site-title" href="/">
+          Mingxiang's blog
+          
+        </a>
+        <ul class="visible-links"></ul>
+        
+        <button class="greedy-nav__toggle hidden" type="button">
+          <span class="visually-hidden">Toggle menu</span>
+          <div class="navicon"></div>
+        </button>
+        <ul class="hidden-links hidden"></ul>
+      </nav>
+    </div>
+  </div>
+</div>
+
+
+    <div class="initial-content">
+      
+
+
+
+<div id="main" role="main">
+  
+
+
+  <article class="page" itemscope itemtype="https://schema.org/CreativeWork">
+    <meta itemprop="headline" content="WSL tricks">
+    <meta itemprop="description" content="This post shares some WSL (Windows Subsystem for Linux) tricks. The WindowsSubsystem for Linux lets developers run a GNU/Linux environment – includingmost command-line tools, utilities, and applications – directly on Windows,unmodified, without the overhead of a virtual machine.">
+    <meta itemprop="datePublished" content="2020-04-11T19:37:24+08:00">
+    
+
+    <div class="page__inner-wrap">
+      
+        <header>
+          <h1 id="page-title" class="page__title" itemprop="headline">WSL tricks
+</h1>
+          
+            <p class="page__meta"><i class="far fa-clock" aria-hidden="true"></i> 
+
+
+
+
+  6 minute read
+
+</p>
+          
+        </header>
+      
+
+      <section class="page__content" itemprop="text">
+        
+          <aside class="sidebar__right sticky">
+            <nav class="toc">
+              <header><h4 class="nav__title"><i class="fas fa-file-alt"></i> On this page</h4></header>
+              <ul class="toc__menu">
+  <li><a href="#wrong-777-permission">Wrong 777 permission</a>
+    <ul>
+      <li><a href="#for-mounted-directories-from-windows-system">For mounted directories from Windows system</a></li>
+      <li><a href="#for-newly-created-directories">For newly created directories</a></li>
+    </ul>
+  </li>
+  <li><a href="#windows-executables-paths-are-missing">Windows executables PATHs are missing</a></li>
+  <li><a href="#start-ssh-agent-automatically">Start ssh-agent automatically</a></li>
+  <li><a href="#access-windows-clipboard-in-nvim-on-wsl">Access Windows clipboard in nvim on WSL</a></li>
+  <li><a href="#open-directory-or-url-from-wsl">Open directory or URL from WSL</a></li>
+  <li><a href="#remove-ugly-green-background-for-directories">Remove ugly green background for directories</a></li>
+  <li><a href="#use-vagrant">Use vagrant</a>
+    <ul>
+      <li><a href="#kernel-panic---not-syncing">Kernel panic - not syncing</a></li>
+      <li><a href="#agent-forwarding-issue">Agent forwarding issue</a></li>
+    </ul>
+  </li>
+</ul>
+
+            </nav>
+          </aside>
+        
+        <p>This post shares some WSL (Windows Subsystem for Linux) tricks. The Windows
+Subsystem for Linux lets developers run a GNU/Linux environment – including
+most command-line tools, utilities, and applications – directly on Windows,
+unmodified, without the overhead of a virtual machine.</p>
+
+<p class="notice--info"><strong>Tip:</strong> If you haven’t heard of WSL, you can find more information
+<a href="https://docs.microsoft.com/en-us/windows/wsl/about">here</a>.</p>
+
+<p>When I installed WSL Ubuntu, and setup the development environment using my
+<a href="https://github.com/uzxmx/dotfiles">dotfiles</a>, I encountered some issues and inconveniences, such as:</p>
+
+<ul>
+  <li>New directory is created wrongly with 777 permission.</li>
+  <li>Directory shows ugly green background.</li>
+  <li>Need to input passphrase for my private key every time I ssh into a machine.</li>
+  <li>Cannot open directory from WSL.</li>
+  <li>…</li>
+</ul>
+
+<p>Below I list solutions for each of those issues.</p>
+
+<h3 id="wrong-777-permission">Wrong 777 permission</h3>
+
+<p>Basically, there are two kinds of 777 permission issues. They are:</p>
+
+<ul>
+  <li>The mounted directories from Windows system (like files in C drive) having 777
+permission.</li>
+  <li>Newly created directories on WSL having 777 permission.</li>
+</ul>
+
+<h4 id="for-mounted-directories-from-windows-system">For mounted directories from Windows system</h4>
+
+<p>On WSL, add below contents to <code class="highlighter-rouge">/etc/wsl.conf</code>, if that file doesn’t exist,
+create a new one. You may need to restart WSL or Windows system in order to make
+the settings alive.</p>
+
+<div class="language-ini highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="nn">[automount]</span>
+<span class="py">options</span> <span class="p">=</span> <span class="s">"metadata,umask=022"</span>
+</code></pre></div></div>
+
+<p class="notice--info"><strong>Tip:</strong> For more information about WSL settings, please visit
+<a href="https://docs.microsoft.com/en-us/windows/wsl/wsl-config#set-wsl-launch-settings">here</a></p>
+
+<h4 id="for-newly-created-directories">For newly created directories</h4>
+
+<p>When you create a new file in an interactive shell, the file permission is given
+according to mask value. You  can check that value by running <code class="highlighter-rouge">umask</code> in your
+shell. If the value is <code class="highlighter-rouge">0000</code>, then it means the newly created directory will be
+given 777 permission (rwxrwxrwx).</p>
+
+<p>There are two solutions for this issue.</p>
+
+<p>The first solution is adding below contents to your <code class="highlighter-rouge">~/.bashrc</code> or <code class="highlighter-rouge">~/.zshrc</code>.</p>
+
+<div class="language-sh highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="nb">umask </span>002
+</code></pre></div></div>
+
+<p>The second solution is to ask <code class="highlighter-rouge">wsl.exe</code> to launch a login shell through
+<code class="highlighter-rouge">/bin/login</code>. Run below command in <code class="highlighter-rouge">cmd.exe</code> or <code class="highlighter-rouge">powershell.exe</code> or your
+favorite terminal, change the username to your own:</p>
+
+<div class="language-sh highlighter-rouge"><div class="highlight"><pre class="highlight"><code>wsl.exe <span class="nt">-u</span> root <span class="nt">--</span> /bin/login <span class="nt">-f</span> username
+</code></pre></div></div>
+
+<p class="notice--warning"><strong>Note:</strong> The side-effect is that specific paths will be removed from PATH
+environment variable.</p>
+
+<h3 id="windows-executables-paths-are-missing">Windows executables PATHs are missing</h3>
+
+<p>If you use the second solution from <a href="#for-newly-created-directories">here</a>, or
+for some reason, you find some Windows executables PATHs are missing from WSL
+shell’s PATH environment variable. You can use below way to append Windows paths
+to PATH environment variable, so that you can call your favorite Windows
+executables from WSL.</p>
+
+<p>Add below contents to your <code class="highlighter-rouge">~/.bashrc</code> or <code class="highlighter-rouge">~/.zshrc</code>:</p>
+
+<div class="language-sh highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">if</span> <span class="o">[[</span> <span class="s2">"</span><span class="si">$(</span><span class="nb">uname</span> <span class="nt">-r</span><span class="si">)</span><span class="s2">"</span> <span class="o">=</span>~ Microsoft<span class="nv">$ </span><span class="o">]]</span><span class="p">;</span> <span class="k">then
+  </span><span class="nv">_path</span><span class="o">=</span><span class="s2">"</span><span class="si">$(</span>/mnt/c/Windows/System32/cmd.exe /c <span class="s2">"echo %PATH%"</span> | <span class="nb">tr</span> <span class="s2">";"</span> <span class="s2">"</span><span class="se">\n</span><span class="s2">"</span> | <span class="nb">sed</span> <span class="nt">-Ee</span> <span class="s1">'s/^([C-Z]):/\/mnt\/\l\1/'</span> <span class="nt">-e</span> <span class="s1">'s/\\/\//g'</span> | <span class="nb">tr</span> <span class="s2">"</span><span class="se">\n</span><span class="s2">"</span> <span class="s2">":"</span><span class="si">)</span><span class="s2">"</span>
+  <span class="k">if</span> <span class="o">[[</span> <span class="nt">-n</span> <span class="s2">"</span><span class="nv">$_path</span><span class="s2">"</span> <span class="o">]]</span><span class="p">;</span> <span class="k">then
+    </span><span class="nv">PATH</span><span class="o">=</span><span class="s2">"</span><span class="nv">$PATH</span><span class="s2">:</span><span class="nv">$_path</span><span class="s2">"</span>
+  <span class="k">fi
+fi</span>
+</code></pre></div></div>
+
+<h3 id="start-ssh-agent-automatically">Start ssh-agent automatically</h3>
+
+<p>If your private key is protected by a non-empty passphrase, you may need to
+input the passphrase every time you push to github or ssh into a machine. To
+avoid this, you can start ssh-agent once you open a terminal or start a new
+interactive shell. Add below contents to your <code class="highlighter-rouge">~/.bashrc</code> or <code class="highlighter-rouge">~/.zshrc</code>:</p>
+
+<div class="language-sh highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c"># Share a same ssh-agent across sessions.</span>
+<span class="k">if</span> <span class="o">[</span> <span class="nt">-f</span> ~/.ssh-agent.generated.env <span class="o">]</span><span class="p">;</span> <span class="k">then</span>
+  <span class="nb">.</span> ~/.ssh-agent.generated.env <span class="o">&gt;</span>/dev/null
+  <span class="c"># If the $SSH_AGENT_PID is occupied by other process, we need to manually</span>
+  <span class="c"># remove ~/.ssh-agent.generated.env.</span>
+  <span class="k">if</span> <span class="o">!</span> <span class="nb">kill</span> <span class="nt">-0</span> <span class="nv">$SSH_AGENT_PID</span> &amp;&gt;/dev/null<span class="p">;</span> <span class="k">then</span>
+    <span class="c"># Stale ssh-agent env file found. Spawn a new ssh-agent.</span>
+    <span class="nb">eval</span> <span class="sb">`</span>ssh-agent | <span class="nb">tee</span> ~/.ssh-agent.generated.env<span class="sb">`</span>
+    ssh-add
+  <span class="k">fi
+else
+  </span><span class="nb">eval</span> <span class="sb">`</span>ssh-agent | <span class="nb">tee</span> ~/.ssh-agent.generated.env<span class="sb">`</span>
+  ssh-add
+<span class="k">fi</span>
+</code></pre></div></div>
+
+<h3 id="access-windows-clipboard-in-nvim-on-wsl">Access Windows clipboard in nvim on WSL</h3>
+
+<p>According to <a href="https://github.com/neovim/neovim/wiki/FAQ#how-to-use-the-windows-clipboard-from-wsl">this wiki</a>, we can use
+<a href="https://github.com/equalsraf/win32yank">win32yank</a> to access windows clipbard
+in nvim, but the steps are too many, and <code class="highlighter-rouge">win32yank.exe</code> must be put outside of
+WSL rootfs in order to work. I only want to do a quick setup on WSL side. Here
+comes the dragon.</p>
+
+<p>We can use <code class="highlighter-rouge">clip.exe</code> that comes with Windows system to copy something to
+clipbard. To get from clipbard, Windows doesn’t provide such utility. We can use
+<code class="highlighter-rouge">powershell.exe -command Get-Clipboard</code> to do that. But that costs too much time
+to run on WSL. So we need a more efficient way to implement that.</p>
+
+<p>Here is a <a href="https://github.com/uzxmx/pasteboard">package</a> that provides two
+commands <code class="highlighter-rouge">pbcopy.exe</code> and <code class="highlighter-rouge">pbpaste.exe</code>, which are much like OSX’s
+pbcopy/pbpaste. Install it through <a href="https://scoop.sh/">scoop</a>.</p>
+
+<div class="language-sh highlighter-rouge"><div class="highlight"><pre class="highlight"><code>scoop <span class="nb">install </span>https://raw.githubusercontent.com/uzxmx/scoop-extras/master/bucket/pasteboard.json
+</code></pre></div></div>
+
+<p>After the installation, make sure scoop shims are in $PATH. Run <code class="highlighter-rouge">type
+pbpaste.exe</code> to check if it’s in $PATH. You may need to restart the terminal if
+$PATH doesn’t contain scoop shims.</p>
+
+<p>Add below contents to your <code class="highlighter-rouge">~/.vimrc</code>:</p>
+
+<div class="language-vim highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">if</span> system<span class="p">(</span><span class="s1">'uname -r'</span><span class="p">)</span> <span class="p">=~</span> <span class="s1">'Microsoft'</span>
+  <span class="k">let</span> <span class="nv">g:clipboard</span> <span class="p">=</span> <span class="p">{</span>
+<span class="se">    \</span> <span class="s1">'name'</span><span class="p">:</span> <span class="s1">'WSLClipboard'</span><span class="p">,</span>
+<span class="se">    \</span> <span class="s1">'copy'</span><span class="p">:</span> <span class="p">{</span>
+<span class="se">    \</span>   <span class="s1">'+'</span><span class="p">:</span> <span class="s1">'clip.exe'</span><span class="p">,</span>
+<span class="se">    \</span>   <span class="s1">'*'</span><span class="p">:</span> <span class="s1">'clip.exe'</span><span class="p">,</span>
+<span class="se">    \</span>   <span class="p">},</span>
+<span class="se">    \</span> <span class="s1">'paste'</span><span class="p">:</span> <span class="p">{</span>
+<span class="se">    \</span>   <span class="s1">'+'</span><span class="p">:</span> <span class="s1">'pbpaste.exe --lf'</span><span class="p">,</span>
+<span class="se">    \</span>   <span class="s1">'*'</span><span class="p">:</span> <span class="s1">'pbpaste.exe --lf'</span><span class="p">,</span>
+<span class="se">    \</span>   <span class="p">},</span>
+<span class="se">    \</span> <span class="s1">'cache_enabled'</span><span class="p">:</span> <span class="m">1</span>
+<span class="se">    \</span> <span class="p">}</span>
+<span class="k">endif</span>
+</code></pre></div></div>
+
+<p class="notice--info"><strong>Tip:</strong> For more information about <code class="highlighter-rouge">g:clipboard</code> in nvim, run <code class="highlighter-rouge">:h g:clipboard</code>.</p>
+
+<p>Reopen nvim. This time, when you press <code class="highlighter-rouge">y</code> to yank, the text should go to
+clipboard, and when pressing <code class="highlighter-rouge">p</code> to paste, the content of clipboard should be
+pasted.</p>
+
+<h3 id="open-directory-or-url-from-wsl">Open directory or URL from WSL</h3>
+
+<p>If you have used much CLI in OSX system, you must be familiar with <code class="highlighter-rouge">open</code>
+command. It can open a file or directory in Finder window, also can open a web
+page if the parameter is with HTTP schema. So how to do these on WSL? Here’re
+some examples that show how to do that.</p>
+
+<div class="language-sh highlighter-rouge"><div class="highlight"><pre class="highlight"><code>cmd.exe /c <span class="s2">"start explorer.exe C:</span><span class="se">\\</span><span class="s2">Windows"</span>
+cmd.exe /c <span class="s2">"start explorer.exe C:</span><span class="se">\\</span><span class="s2">Users"</span>
+
+cmd.exe /c start <span class="s2">"http://example.com"</span>
+</code></pre></div></div>
+
+<p class="notice--warning"><strong>Note:</strong> The directory passed to <code class="highlighter-rouge">explorer.exe</code> must be Windows path (not WSL
+path like /mnt/c/Windows). To open a browser, the parameter must be with
+<code class="highlighter-rouge">http://</code> or <code class="highlighter-rouge">https://</code> prefix.</p>
+
+<p>For a full convenient script, you can reference the bash script
+<a href="https://github.com/uzxmx/dotfiles/blob/master/bin/open">open</a> which
+imitates OSX’s open.</p>
+
+<h3 id="remove-ugly-green-background-for-directories">Remove ugly green background for directories</h3>
+
+<p>A color init string consists of one or more numeric codes, seperated by <code class="highlighter-rouge">;</code>. For
+example:</p>
+
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>OTHER_WRITABLE 34;42
+EXEC 00;31
+</code></pre></div></div>
+
+<p>Below are all numeric codes:</p>
+
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>Attribute codes:
+00=none 01=bold 04=underscore 05=blink 07=reverse 08=concealed
+
+Text color codes:
+30=black 31=red 32=green 33=yellow 34=blue 35=magenta 36=cyan 37=white
+
+Background color codes:
+40=black 41=red 42=green 43=yellow 44=blue 45=magenta 46=cyan 47=white
+</code></pre></div></div>
+
+<p>For <code class="highlighter-rouge">OTHER_WRITABLE 34;42</code>, it means o+w directory has blue text and green
+background. For <code class="highlighter-rouge">EXEC 00;31</code>, it means executable file has red text, with no
+attribute and no background.</p>
+
+<p>In order to update the color, we first generate default colors by executing:</p>
+
+<div class="language-sh highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="nb">dircolors</span> <span class="nt">-p</span> <span class="o">&gt;</span>~/.dircolors
+</code></pre></div></div>
+
+<p>Then open <code class="highlighter-rouge">~/.dircolors</code>, change the color of the target type. For example,
+change color of <code class="highlighter-rouge">OTHER_WRITABLE</code> from <code class="highlighter-rouge">34;42</code>  to <code class="highlighter-rouge">00;34</code>, the background will
+be removed.</p>
+
+<p>After changing any color, add below content to your <code class="highlighter-rouge">~/.bashrc</code> or <code class="highlighter-rouge">~/.zshrc</code>:</p>
+
+<div class="language-sh highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="nb">eval</span> <span class="s2">"</span><span class="si">$(</span><span class="nb">dircolors</span> ~/.dircolors<span class="si">)</span><span class="s2">"</span>
+</code></pre></div></div>
+
+<p>For Zsh user, you also need to add below content to make the color normal when
+auto-completing.</p>
+
+<div class="language-zsh highlighter-rouge"><div class="highlight"><pre class="highlight"><code>zstyle <span class="s1">':completion:*'</span> list-colors <span class="k">${</span><span class="p">(s.</span>:.<span class="p">)LS_COLORS</span><span class="k">}</span>
+</code></pre></div></div>
+
+<p>Then start a new shell. You shouldn’t see ugly green background any more.</p>
+
+<h3 id="use-vagrant">Use vagrant</h3>
+
+<p>Vagrant <a href="https://www.vagrantup.com/docs/other/wsl.html#windows-access">supports</a>
+WSL, but some of Vagrantfile and plugins may not support it. For example, if you
+use <code class="highlighter-rouge">ubuntu/bionic64</code> box, in <code class="highlighter-rouge">~/.vagrant.d/boxes/ubuntu-VAGRANTSLASH-bionic64/0/virtualbox</code>
+there is a line shown below:</p>
+
+<div class="language-rb highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">vb</span><span class="p">.</span><span class="nf">customize</span> <span class="p">[</span> <span class="s2">"modifyvm"</span><span class="p">,</span> <span class="ss">:id</span><span class="p">,</span> <span class="s2">"--uartmode1"</span><span class="p">,</span> <span class="s2">"file"</span><span class="p">,</span> <span class="no">File</span><span class="p">.</span><span class="nf">join</span><span class="p">(</span><span class="no">Dir</span><span class="p">.</span><span class="nf">pwd</span><span class="p">,</span> <span class="s2">"ubuntu-bionic-18.04-cloudimg-console.log"</span><span class="p">)</span> <span class="p">]</span>
+</code></pre></div></div>
+
+<p>The above line will stop vagrant working on WSL. Because it sets a WSL path in
+Virtualbox, but Virtualbox cannot find that path, we must convert the WSL path
+to Windows path so that it can work. There is also a quick workaround
+<a href="https://github.com/hashicorp/vagrant/issues/8604">here</a>. <del>For such reason, I
+suggest not to use vagrant on WSL. Instead, use vagrant on Windows directly.</del>
+Because I use <code class="highlighter-rouge">centos/7</code> as my base box, unlike <code class="highlighter-rouge">ubuntu/bionic64</code> it works well
+on WSL, so I still insist on using vagrant on WSL.</p>
+
+<p>When using vagrant on WSL or Windows, the vagrant project should exist outside of WSL
+rootfs so that virtualbox or vagrant can find the correct path.</p>
+
+<h4 id="kernel-panic---not-syncing">Kernel panic - not syncing</h4>
+
+<p>If you run Vagrant Centos/7 box, you may experience an error <a href="https://forums.virtualbox.org/viewtopic.php?f=3&amp;t=93990">Kernel panic - not
+syncing</a> on Virtualbox
+6.0.8. A workaround is to use Virtualbox 6.0.6. I haven’t tried if it works in
+the latest version.</p>
+
+<h4 id="agent-forwarding-issue">Agent forwarding issue</h4>
+
+<p>This issue only appears when using vagrant on Windows (not WSL). When we run
+vagrant, it cannot find ssh agent inside WSL, so ssh agent forwarding may not
+work. As a workaround, we can use ssh directly.</p>
+
+<div class="language-sh highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c"># This one will not work.</span>
+vagrant ssh <span class="nt">--</span> <span class="nt">-A</span>
+
+<span class="c"># This one will work. Replace the port with the correct port which will be</span>
+<span class="c"># shown when you run `vagrant up` or `vagrant ssh-config`. Below line</span>
+<span class="c"># assumes the current working directory is vagrant project root directory,</span>
+<span class="c"># you may need to ensure the private_key file has correct permission.</span>
+ssh vagrant@localhost <span class="nt">-p</span> port <span class="nt">-i</span> .vagrant/machines/default/virtualbox/private_key <span class="nt">-A</span>
+</code></pre></div></div>
+
+
+        
+      </section>
+
+      <footer class="page__meta">
+        
+        
+
+
+        
+          <p class="page__date"><strong><i class="fas fa-fw fa-calendar-alt" aria-hidden="true"></i> Updated:</strong> <time datetime="2020-04-11T19:37:24+08:00">April 11, 2020</time></p>
+        
+      </footer>
+
+      
+
+      
+  <nav class="pagination">
+    
+      <a href="#" class="pagination--pager disabled">Previous</a>
+    
+    
+      <a href="/add-or-remove-java-annotation-at-runtime.html" class="pagination--pager" title="Add or remove Java annotation at runtime
+">Next</a>
+    
+  </nav>
+
+    </div>
+
+    
+  </article>
+
+  
+  
+</div>
+
+    </div>
+
+    
+
+    <div id="footer" class="page__footer">
+      <footer>
+        <!-- start custom footer snippets -->
+
+<!-- end custom footer snippets -->
+        <div class="page__footer-follow">
+  <ul class="social-icons">
+    
+
+    
+
+    <li><a href="/feed.xml"><i class="fas fa-fw fa-rss-square" aria-hidden="true"></i> Feed</a></li>
+  </ul>
+</div>
+
+<div class="page__footer-copyright">&copy; 2020 Mingxiang's blog. Powered by <a href="https://jekyllrb.com" rel="nofollow">Jekyll</a> &amp; <a href="https://mademistakes.com/work/minimal-mistakes-jekyll-theme/" rel="nofollow">Minimal Mistakes</a>.</div>
+
+      </footer>
+    </div>
+
+    
+  
+    <script src="/assets/scripts/snippet.js"></script>
+  
+
+
+
+
+
+
+
+    
+
+
+
+
+
+
+
+  </body>
+</html>

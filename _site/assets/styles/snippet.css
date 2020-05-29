@@ -1,0 +1,53 @@
+.snippet-header {
+  width: 100%;
+  padding: 0 10px;
+  display: flex;
+}
+
+.snippet-header .snippet-name {
+  display: flex;
+  align-items: center;
+  flex: 2;
+  justify-content: flex-start;
+}
+
+.snippet-header .snippet-name span {
+  margin: 0;
+  padding: 10px 0;
+  font-weight: bold;
+  color: white;
+}
+
+.snippet-header .snippet-actions {
+  display: flex;
+  flex: 1;
+  justify-content: flex-end;
+}
+
+.snippet-header .snippet-actions .snippet-action-copy {
+  outline: none;
+  border: none;
+  align-items: center;
+  cursor: pointer;
+  display: flex;
+  background-color: transparent;
+  color: #e7e7e7;
+}
+
+.snippet-header .snippet-actions .snippet-action-copy::before {
+  content: "Copy";
+}
+
+.snippet-header .snippet-actions .snippet-action-copy::after {
+  margin-left: 4px;
+  content: "📋";
+  width: 1em;
+}
+
+.snippet-header .snippet-actions .snippet-action-copy.copied::before {
+  content: "Copied";
+}
+
+.snippet-header .snippet-actions .snippet-action-copy.copied::after {
+  content: "✔️";
+}

@@ -1,0 +1,400 @@
+<!doctype html>
+<!--
+  Minimal Mistakes Jekyll Theme 4.19.1 by Michael Rose
+  Copyright 2013-2019 Michael Rose - mademistakes.com | @mmistakes
+  Free for personal and commercial use under the MIT license
+  https://github.com/mmistakes/minimal-mistakes/blob/master/LICENSE
+-->
+<html lang="en" class="no-js">
+  <head>
+    <meta charset="utf-8">
+
+<!-- begin _includes/seo.html --><title>Renew SSL certificates inside and outside Kubernetes - Mingxiang’s blog</title>
+<meta name="description" content="If you get an SSL certificate from Let’s Encrypt, and the certificate is deployed not only in a Kubernetes cluster, but also outside the cluster (e.g. an Nginx web server). Then when the certificate in Kubernetes cluster gets renewed, how can the same certificate outside Kubernetes cluster get renewed automatically?  ">
+
+
+
+<meta property="og:type" content="article">
+<meta property="og:locale" content="en_US">
+<meta property="og:site_name" content="Mingxiang's blog">
+<meta property="og:title" content="Renew SSL certificates inside and outside Kubernetes">
+<meta property="og:url" content="https://uzxmx.github.io/renew-certificates-inside-outside-kubernetes.html">
+
+
+  <meta property="og:description" content="If you get an SSL certificate from Let’s Encrypt, and the certificate is deployed not only in a Kubernetes cluster, but also outside the cluster (e.g. an Nginx web server). Then when the certificate in Kubernetes cluster gets renewed, how can the same certificate outside Kubernetes cluster get renewed automatically?  ">
+
+
+
+
+
+
+
+  <meta property="article:published_time" content="2020-04-26T21:25:09+08:00">
+
+
+
+
+
+
+<link rel="canonical" href="https://uzxmx.github.io/renew-certificates-inside-outside-kubernetes.html">
+
+
+
+
+<script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    
+      "@type": "Person",
+      "name": null,
+      "url": "https://uzxmx.github.io/"
+    
+  }
+</script>
+
+
+  <meta name="google-site-verification" content="4cV_DkFkOihbmPCkF3LqIVBC3lM0yA0UhentAgp7Mmg" />
+
+
+  <meta name="msvalidate.01" content="E2FD20A4199C5CDBE9E4842CCD5820E0">
+
+
+
+
+<!-- end _includes/seo.html -->
+
+
+<link href="/feed.xml" type="application/atom+xml" rel="alternate" title="Mingxiang's blog Feed">
+
+<!-- https://t.co/dKP3o1e -->
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<script>
+  document.documentElement.className = document.documentElement.className.replace(/\bno-js\b/g, '') + ' js ';
+</script>
+
+<!-- For all browsers -->
+<link rel="stylesheet" href="/assets/css/main.css">
+
+<!--[if IE]>
+  <style>
+    /* old IE unsupported flexbox fixes */
+    .greedy-nav .site-title {
+      padding-right: 3em;
+    }
+    .greedy-nav button {
+      position: absolute;
+      top: 0;
+      right: 0;
+      height: 100%;
+    }
+  </style>
+<![endif]-->
+
+
+
+    <link href="/assets/styles/snippet.css" rel="stylesheet" type="text/css">
+
+  </head>
+
+  <body class="layout--single">
+    <nav class="skip-links">
+  <h2 class="screen-reader-text">Skip links</h2>
+  <ul>
+    <li><a href="#site-nav" class="screen-reader-shortcut">Skip to primary navigation</a></li>
+    <li><a href="#main" class="screen-reader-shortcut">Skip to content</a></li>
+    <li><a href="#footer" class="screen-reader-shortcut">Skip to footer</a></li>
+  </ul>
+</nav>
+
+    <!--[if lt IE 9]>
+<div class="notice--danger align-center" style="margin: 0;">You are using an <strong>outdated</strong> browser. Please <a href="https://browsehappy.com/">upgrade your browser</a> to improve your experience.</div>
+<![endif]-->
+
+    
+
+<div class="masthead">
+  <div class="masthead__inner-wrap">
+    <div class="masthead__menu">
+      <nav id="site-nav" class="greedy-nav">
+        
+        <a class="site-title" href="/">
+          Mingxiang's blog
+          
+        </a>
+        <ul class="visible-links"></ul>
+        
+        <button class="greedy-nav__toggle hidden" type="button">
+          <span class="visually-hidden">Toggle menu</span>
+          <div class="navicon"></div>
+        </button>
+        <ul class="hidden-links hidden"></ul>
+      </nav>
+    </div>
+  </div>
+</div>
+
+
+    <div class="initial-content">
+      
+
+
+
+<div id="main" role="main">
+  
+
+
+  <article class="page" itemscope itemtype="https://schema.org/CreativeWork">
+    <meta itemprop="headline" content="Renew SSL certificates inside and outside Kubernetes">
+    <meta itemprop="description" content="If you get an SSL certificate from Let’s Encrypt, and thecertificate is deployed not only in a Kubernetes cluster, but alsooutside the cluster (e.g. an Nginx web server). Then when the certificate inKubernetes cluster gets renewed, how can the same certificate outside Kubernetescluster get renewed automatically?">
+    <meta itemprop="datePublished" content="2020-04-26T21:25:09+08:00">
+    
+
+    <div class="page__inner-wrap">
+      
+        <header>
+          <h1 id="page-title" class="page__title" itemprop="headline">Renew SSL certificates inside and outside Kubernetes
+</h1>
+          
+            <p class="page__meta"><i class="far fa-clock" aria-hidden="true"></i> 
+
+
+
+
+  3 minute read
+
+</p>
+          
+        </header>
+      
+
+      <section class="page__content" itemprop="text">
+        
+          <aside class="sidebar__right sticky">
+            <nav class="toc">
+              <header><h4 class="nav__title"><i class="fas fa-file-alt"></i> On this page</h4></header>
+              <ul class="toc__menu">
+  <li><a href="#setup-brigade-project">Setup brigade project</a></li>
+  <li><a href="#watch-for-certificates-issued-events">Watch for certificates issued events</a></li>
+  <li><a href="#test-it-out">Test it out</a></li>
+</ul>
+
+            </nav>
+          </aside>
+        
+        <p>If you get an SSL certificate from <a href="https://letsencrypt.org/">Let’s Encrypt</a>, and the
+certificate is deployed not only in a <a href="https://kubernetes.io/">Kubernetes</a> cluster, but also
+outside the cluster (e.g. an Nginx web server). Then when the certificate in
+Kubernetes cluster gets renewed, how can the same certificate outside Kubernetes
+cluster get renewed automatically?</p>
+
+<p>For renewing SSL certificates automatically in Kubernetes cluster, we can rely
+on <a href="https://github.com/jetstack/cert-manager">cert-manager</a>. cert-manager is a Kubernetes add-on to automate
+the management and issuance of TLS certificates from various issuing sources.
+It will ensure certificates are valid and up to date periodically, and attempt
+to renew certificates at an appropriate time before expiry.</p>
+
+<p>For renewing SSL certificates outside Kubernetes cluster, we need to use some
+event mechanism. When cert-manager renews a certificate, it generates a
+Kubernetes event <code class="highlighter-rouge">Certificate:Issued</code>, we can watch for that event and trigger
+the update of certificate outside Kubernetes cluster. Luckily, <a href="https://brigade.sh/">Brigade</a> has
+provided that feature.</p>
+
+<p>This post assumes cert-manager has been setup in Kubernetes cluster, and only
+outlines some key steps for updating certificates outside Kubernetes cluster.
+For a whole detailed setup, you can visit <a href="https://github.com/uzxmx/cert-manager-box">here</a>.</p>
+
+<h3 id="setup-brigade-project">Setup brigade project</h3>
+
+<p>If you haven’t setup brigade in Kubernetes cluster, please visit
+<a href="https://docs.brigade.sh/intro/quickstart/">here</a> to get started. Before
+creating a brigade project, we need to create a directory and initialize it as a
+git repository. Add a file <code class="highlighter-rouge">brigade.js</code> in the repository root with below
+content.</p>
+
+<div class="language-javascript highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kd">const</span> <span class="p">{</span> <span class="nx">events</span> <span class="p">}</span> <span class="o">=</span> <span class="nx">require</span><span class="p">(</span><span class="dl">"</span><span class="s2">brigadier</span><span class="dl">"</span><span class="p">)</span>
+<span class="kd">const</span> <span class="nx">k8s</span> <span class="o">=</span> <span class="nx">require</span><span class="p">(</span><span class="dl">"</span><span class="s2">@kubernetes/client-node</span><span class="dl">"</span><span class="p">)</span>
+<span class="kd">const</span> <span class="nx">axios</span> <span class="o">=</span> <span class="nx">require</span><span class="p">(</span><span class="dl">"</span><span class="s2">axios</span><span class="dl">"</span><span class="p">)</span>
+
+<span class="kd">const</span> <span class="nx">kc</span> <span class="o">=</span> <span class="k">new</span> <span class="nx">k8s</span><span class="p">.</span><span class="nx">KubeConfig</span><span class="p">()</span>
+<span class="nx">kc</span><span class="p">.</span><span class="nx">loadFromDefault</span><span class="p">()</span>
+
+<span class="kd">const</span> <span class="nx">k8sCoreApi</span> <span class="o">=</span> <span class="nx">kc</span><span class="p">.</span><span class="nx">makeApiClient</span><span class="p">(</span><span class="nx">k8s</span><span class="p">.</span><span class="nx">CoreV1Api</span><span class="p">)</span>
+<span class="kd">const</span> <span class="nx">k8sCustomObjectsApi</span> <span class="o">=</span> <span class="nx">kc</span><span class="p">.</span><span class="nx">makeApiClient</span><span class="p">(</span><span class="nx">k8s</span><span class="p">.</span><span class="nx">CustomObjectsApi</span><span class="p">)</span>
+
+<span class="kd">const</span> <span class="nx">getCertificate</span> <span class="o">=</span> <span class="k">async</span> <span class="p">(</span><span class="nx">name</span><span class="p">,</span> <span class="nx">namespace</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="p">{</span>
+  <span class="k">return</span> <span class="k">await</span> <span class="nx">k8sCustomObjectsApi</span><span class="p">.</span><span class="nx">getNamespacedCustomObject</span><span class="p">(</span><span class="dl">"</span><span class="s2">cert-manager.io</span><span class="dl">"</span><span class="p">,</span> <span class="dl">"</span><span class="s2">v1alpha2</span><span class="dl">"</span><span class="p">,</span> <span class="nx">namespace</span><span class="p">,</span> <span class="dl">"</span><span class="s2">certificates</span><span class="dl">"</span><span class="p">,</span> <span class="nx">name</span><span class="p">);</span>
+<span class="p">}</span>
+
+<span class="kd">const</span> <span class="nx">getSecret</span> <span class="o">=</span> <span class="k">async</span> <span class="p">(</span><span class="nx">name</span><span class="p">,</span> <span class="nx">namespace</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="p">{</span>
+  <span class="k">return</span> <span class="k">await</span> <span class="nx">k8sCoreApi</span><span class="p">.</span><span class="nx">readNamespacedSecret</span><span class="p">(</span><span class="nx">name</span><span class="p">,</span> <span class="nx">namespace</span><span class="p">);</span>
+<span class="p">}</span>
+
+<span class="nx">events</span><span class="p">.</span><span class="nx">on</span><span class="p">(</span><span class="dl">"</span><span class="s2">Certificate:Issued</span><span class="dl">"</span><span class="p">,</span> <span class="p">(</span><span class="nx">e</span><span class="p">,</span> <span class="nx">p</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="p">{</span>
+  <span class="kd">let</span> <span class="nx">payload</span> <span class="o">=</span> <span class="nx">JSON</span><span class="p">.</span><span class="nx">parse</span><span class="p">(</span><span class="nx">e</span><span class="p">.</span><span class="nx">payload</span><span class="p">)</span>
+  <span class="kd">let</span> <span class="nx">involvedObject</span> <span class="o">=</span> <span class="nx">payload</span><span class="p">.</span><span class="nx">involvedObject</span>
+  <span class="nx">getCertificate</span><span class="p">(</span><span class="nx">involvedObject</span><span class="p">.</span><span class="nx">name</span><span class="p">,</span> <span class="nx">involvedObject</span><span class="p">.</span><span class="nx">namespace</span><span class="p">).</span><span class="nx">then</span><span class="p">(</span><span class="nx">cert</span> <span class="o">=&gt;</span> <span class="p">{</span>
+    <span class="nx">cert</span> <span class="o">=</span> <span class="nx">cert</span><span class="p">.</span><span class="nx">body</span>
+    <span class="kd">let</span> <span class="nx">spec</span> <span class="o">=</span> <span class="nx">cert</span><span class="p">.</span><span class="nx">spec</span>
+    <span class="kd">let</span> <span class="nx">commonName</span> <span class="o">=</span> <span class="nx">spec</span><span class="p">.</span><span class="nx">commonName</span>
+    <span class="k">if</span> <span class="p">(</span><span class="nx">commonName</span><span class="p">.</span><span class="nx">startsWith</span><span class="p">(</span><span class="dl">"</span><span class="s2">*.</span><span class="dl">"</span><span class="p">))</span> <span class="p">{</span>
+      <span class="nx">commonName</span> <span class="o">=</span> <span class="nx">commonName</span><span class="p">.</span><span class="nx">substring</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="nx">commonName</span><span class="p">.</span><span class="nx">length</span><span class="p">)</span>
+    <span class="p">}</span>
+
+    <span class="nx">getSecret</span><span class="p">(</span><span class="nx">spec</span><span class="p">.</span><span class="nx">secretName</span><span class="p">,</span> <span class="nx">cert</span><span class="p">.</span><span class="nx">metadata</span><span class="p">.</span><span class="nx">namespace</span><span class="p">).</span><span class="nx">then</span><span class="p">(</span><span class="nx">secret</span> <span class="o">=&gt;</span> <span class="p">{</span>
+      <span class="kd">let</span> <span class="nx">data</span> <span class="o">=</span> <span class="nx">secret</span><span class="p">.</span><span class="nx">body</span><span class="p">.</span><span class="nx">data</span>
+
+      <span class="kd">let</span> <span class="nx">buf</span> <span class="o">=</span> <span class="k">new</span> <span class="nx">Buffer</span><span class="p">(</span><span class="nx">data</span><span class="p">[</span><span class="dl">"</span><span class="s2">tls.crt</span><span class="dl">"</span><span class="p">],</span> <span class="dl">"</span><span class="s2">base64</span><span class="dl">"</span><span class="p">)</span>
+      <span class="kd">let</span> <span class="nx">certPem</span> <span class="o">=</span> <span class="nx">buf</span><span class="p">.</span><span class="nx">toString</span><span class="p">(</span><span class="dl">"</span><span class="s2">ascii</span><span class="dl">"</span><span class="p">)</span>
+      <span class="nx">buf</span> <span class="o">=</span> <span class="k">new</span> <span class="nx">Buffer</span><span class="p">(</span><span class="nx">data</span><span class="p">[</span><span class="dl">"</span><span class="s2">tls.key</span><span class="dl">"</span><span class="p">],</span> <span class="dl">"</span><span class="s2">base64</span><span class="dl">"</span><span class="p">)</span>
+      <span class="kd">let</span> <span class="nx">keyPem</span> <span class="o">=</span> <span class="nx">buf</span><span class="p">.</span><span class="nx">toString</span><span class="p">(</span><span class="dl">"</span><span class="s2">ascii</span><span class="dl">"</span><span class="p">)</span>
+
+      <span class="nx">console</span><span class="p">.</span><span class="nx">log</span><span class="p">(</span><span class="dl">"</span><span class="s2">certPem: </span><span class="dl">"</span> <span class="o">+</span> <span class="nx">certPem</span><span class="p">)</span>
+      <span class="nx">console</span><span class="p">.</span><span class="nx">log</span><span class="p">(</span><span class="dl">"</span><span class="s2">keyPem: </span><span class="dl">"</span> <span class="o">+</span> <span class="nx">keyPem</span><span class="p">)</span>
+
+      <span class="c1">// TODO uncomment this if you want to trigger Gitlab CI pipeline through webhook.</span>
+      <span class="c1">// axios.post('https://gitlab.exaple.com/api/v4/projects/1/trigger/pipeline', {</span>
+      <span class="c1">//   token: 'YOUR_GITLAB_CI_TOKEN',</span>
+      <span class="c1">//   ref: 'master',</span>
+      <span class="c1">//   variables: {</span>
+      <span class="c1">//     COMMON_NAME: commonName,</span>
+      <span class="c1">//     TLS_CERT: data['tls.crt'],</span>
+      <span class="c1">//     TLS_KEY: data['tls.key']</span>
+      <span class="c1">//   }</span>
+      <span class="c1">// })</span>
+    <span class="p">})</span>
+  <span class="p">})</span>
+<span class="p">})</span>
+</code></pre></div></div>
+
+<p>The above snippets only output certificate and private key file. To update
+certificate elsewhere, you can pass the certificate through webhook to Gitlab
+CI, Jenkins or other CI service to synchronize certificates.</p>
+
+<p>We also need to add a file <code class="highlighter-rouge">brigade.json</code> in the root directory to specify
+dependencies imported in <code class="highlighter-rouge">brigade.js</code>.</p>
+
+<div class="language-json highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="p">{</span><span class="w">
+  </span><span class="nl">"dependencies"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w">
+    </span><span class="nl">"axios"</span><span class="p">:</span><span class="w"> </span><span class="s2">"0.19.0"</span><span class="w">
+  </span><span class="p">}</span><span class="w">
+</span><span class="p">}</span><span class="w">
+</span></code></pre></div></div>
+
+<p>Then we’re good to create a brigade project.</p>
+
+<h3 id="watch-for-certificates-issued-events">Watch for certificates issued events</h3>
+
+<p><a href="https://github.com/uzxmx/brigade-k8s-gateway">Brigade Kubernetes Gateway</a> can
+watch for events in Kubernetes cluster, and send an event to brigade core, then
+a brigade worker will be created to execute a project’s <code class="highlighter-rouge">brigade.js</code> file.</p>
+
+<p>Download the latest chart from <a href="https://github.com/uzxmx/brigade-k8s-gateway/releases">here</a>, and
+use helm to install it. Specify below <code class="highlighter-rouge">values.yml</code> file. Replace YOUR_PROJECT_ID
+with your real brigade project id.</p>
+
+<div class="language-yaml highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="na">project</span><span class="pi">:</span> <span class="s">YOUR_PROJECT_ID</span>
+<span class="na">filters</span><span class="pi">:</span>
+  <span class="pi">-</span> <span class="na">kind</span><span class="pi">:</span> <span class="s">Certificate</span>
+    <span class="na">reasons</span><span class="pi">:</span>
+      <span class="pi">-</span> <span class="s">Issued</span>
+    <span class="na">action</span><span class="pi">:</span> <span class="s">accept</span>
+  <span class="pi">-</span> <span class="na">action</span><span class="pi">:</span> <span class="s">reject</span>
+</code></pre></div></div>
+
+<h3 id="test-it-out">Test it out</h3>
+
+<p>When a certificate is renewed or a new certificate is created, a pod of a
+brigade worker for the created project should be launched, and in the pod logs
+there should be the contents of certificate and private key. For convenience,
+you can even generate a fake <code class="highlighter-rouge">Certificate:Issued</code> event by using this
+<a href="https://github.com/uzxmx/k8s-busybox">utility</a>.</p>
+
+<div class="language-sh highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="nv">$ </span>curl <span class="nt">-C-</span> <span class="nt">-L</span> <span class="nt">-O</span> https://github.com/uzxmx/k8s-busybox/releases/download/v0.1.0/k8s-busybox-v0.1.0-linux-amd64.tar.gz
+<span class="nv">$ </span><span class="nb">tar </span>zxf k8s-busybox-v0.1.0-linux-amd64.tar.gz
+<span class="nv">$ </span>./linux-amd64/bin/k8s-eventgenerator <span class="nt">--name</span> YOUR_CERTIFICATE_NAME <span class="se">\</span>
+    <span class="nt">--kind</span> Certificate <span class="nt">--reason</span> Issued <span class="nt">--message</span> <span class="s1">'Fake event'</span>
+</code></pre></div></div>
+
+
+        
+      </section>
+
+      <footer class="page__meta">
+        
+        
+
+
+        
+          <p class="page__date"><strong><i class="fas fa-fw fa-calendar-alt" aria-hidden="true"></i> Updated:</strong> <time datetime="2020-04-26T21:25:09+08:00">April 26, 2020</time></p>
+        
+      </footer>
+
+      
+
+      
+  <nav class="pagination">
+    
+      <a href="/add-or-remove-java-annotation-at-runtime.html" class="pagination--pager" title="Add or remove Java annotation at runtime
+">Previous</a>
+    
+    
+      <a href="/prometheus-bootstrap-internals.html" class="pagination--pager" title="Prometheus bootstrap internals
+">Next</a>
+    
+  </nav>
+
+    </div>
+
+    
+  </article>
+
+  
+  
+</div>
+
+    </div>
+
+    
+
+    <div id="footer" class="page__footer">
+      <footer>
+        <!-- start custom footer snippets -->
+
+<!-- end custom footer snippets -->
+        <div class="page__footer-follow">
+  <ul class="social-icons">
+    
+
+    
+
+    <li><a href="/feed.xml"><i class="fas fa-fw fa-rss-square" aria-hidden="true"></i> Feed</a></li>
+  </ul>
+</div>
+
+<div class="page__footer-copyright">&copy; 2020 Mingxiang's blog. Powered by <a href="https://jekyllrb.com" rel="nofollow">Jekyll</a> &amp; <a href="https://mademistakes.com/work/minimal-mistakes-jekyll-theme/" rel="nofollow">Minimal Mistakes</a>.</div>
+
+      </footer>
+    </div>
+
+    
+  
+    <script src="/assets/scripts/snippet.js"></script>
+  
+
+
+
+
+
+
+
+    
+
+
+
+
+
+
+
+  </body>
+</html>
