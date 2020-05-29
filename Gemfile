@@ -1,6 +1,9 @@
 source 'https://rubygems.org'
 
+git_source(:github) { |repo_name| "https://github.com/#{repo_name}" }
+
 gem 'minimal-mistakes-jekyll', '~> 4.19.1'
+gem 'jekyll-snippet', github: 'uzxmx/jekyll-snippet'
 
 if ENV['JEKYLL_ENV'] == 'production'
   gem "github-pages", "~> 204", group: :jekyll_plugins

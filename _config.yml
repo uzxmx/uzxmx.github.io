@@ -11,6 +11,7 @@ remote_theme: "mmistakes/minimal-mistakes@4.19.1"
 plugins:
   - jekyll-include-cache
   - jekyll-sitemap
+  - jekyll-snippet
 
 comments:
   provider: "custom"
@@ -33,3 +34,6 @@ defaults:
       toc_sticky: true
       read_time: true
       comments: true
+
+footer_scripts:
+  - /assets/scripts/snippet.js

@@ -29,3 +29,12 @@
 a, a:visited {
   text-decoration: none;
 }
+
+figure.highlight > pre {
+  padding-top: 0;
+}
+
+.highlight table td.gutter {
+  padding-right: 0;
+  border-right: none;
+}
