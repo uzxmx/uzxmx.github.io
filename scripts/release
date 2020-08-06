@@ -11,7 +11,7 @@ fi
 
 ref=$(git rev-parse --short HEAD)
 
-git checkout master
+git checkout -B master origin/master
 
 for file in _site/*; do
   if [ -d "$file" ]; then
