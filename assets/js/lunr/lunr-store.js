@@ -34,4 +34,10 @@ var store = [{
         "tags": [],
         "url": "https://uzxmx.github.io/prometheus-tsdb-internals.html",
         "teaser": null
+      },{
+        "title": "Redis RDB internals",
+        "excerpt":"This post aims to covering how Redis dumps in-memory data into a disk file. The version of Redis used is 6.0.5. First, let’s look at how Redis prepares for the dump. In main function, Redis initializes a global redisServer structure, registering a timer callback serverCron (should be scheduled per millisecond)...","categories": ["redis"],
+        "tags": [],
+        "url": "https://uzxmx.github.io/redis-rdb-internals.html",
+        "teaser": null
       }]

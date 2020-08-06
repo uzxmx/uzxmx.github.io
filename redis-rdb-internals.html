@@ -1,0 +1,733 @@
+<!doctype html>
+<!--
+  Minimal Mistakes Jekyll Theme 4.19.1 by Michael Rose
+  Copyright 2013-2019 Michael Rose - mademistakes.com | @mmistakes
+  Free for personal and commercial use under the MIT license
+  https://github.com/mmistakes/minimal-mistakes/blob/master/LICENSE
+-->
+<html lang="en" class="no-js">
+  <head>
+    <meta charset="utf-8">
+
+<!-- begin _includes/seo.html --><title>Redis RDB internals - Mingxiang’s blog</title>
+<meta name="description" content="This post aims to covering how Redis dumps in-memory data into a disk file.  The version of Redis used is 6.0.5.  ">
+
+
+
+<meta property="og:type" content="article">
+<meta property="og:locale" content="en_US">
+<meta property="og:site_name" content="Mingxiang's blog">
+<meta property="og:title" content="Redis RDB internals">
+<meta property="og:url" content="https://uzxmx.github.io/redis-rdb-internals.html">
+
+
+  <meta property="og:description" content="This post aims to covering how Redis dumps in-memory data into a disk file.  The version of Redis used is 6.0.5.  ">
+
+
+
+
+
+
+
+  <meta property="article:published_time" content="2020-06-13T10:11:00+08:00">
+
+
+
+
+
+
+<link rel="canonical" href="https://uzxmx.github.io/redis-rdb-internals.html">
+
+
+
+
+<script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    
+      "@type": "Person",
+      "name": null,
+      "url": "https://uzxmx.github.io/"
+    
+  }
+</script>
+
+
+  <meta name="google-site-verification" content="4cV_DkFkOihbmPCkF3LqIVBC3lM0yA0UhentAgp7Mmg" />
+
+
+  <meta name="msvalidate.01" content="E2FD20A4199C5CDBE9E4842CCD5820E0">
+
+
+
+
+<!-- end _includes/seo.html -->
+
+
+<link href="/feed.xml" type="application/atom+xml" rel="alternate" title="Mingxiang's blog Feed">
+
+<!-- https://t.co/dKP3o1e -->
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<script>
+  document.documentElement.className = document.documentElement.className.replace(/\bno-js\b/g, '') + ' js ';
+</script>
+
+<!-- For all browsers -->
+<link rel="stylesheet" href="/assets/css/main.css">
+
+<!--[if IE]>
+  <style>
+    /* old IE unsupported flexbox fixes */
+    .greedy-nav .site-title {
+      padding-right: 3em;
+    }
+    .greedy-nav button {
+      position: absolute;
+      top: 0;
+      right: 0;
+      height: 100%;
+    }
+  </style>
+<![endif]-->
+
+
+
+    <link href="/assets/styles/snippet.css" rel="stylesheet" type="text/css">
+
+  </head>
+
+  <body class="layout--single">
+    <nav class="skip-links">
+  <h2 class="screen-reader-text">Skip links</h2>
+  <ul>
+    <li><a href="#site-nav" class="screen-reader-shortcut">Skip to primary navigation</a></li>
+    <li><a href="#main" class="screen-reader-shortcut">Skip to content</a></li>
+    <li><a href="#footer" class="screen-reader-shortcut">Skip to footer</a></li>
+  </ul>
+</nav>
+
+    <!--[if lt IE 9]>
+<div class="notice--danger align-center" style="margin: 0;">You are using an <strong>outdated</strong> browser. Please <a href="https://browsehappy.com/">upgrade your browser</a> to improve your experience.</div>
+<![endif]-->
+
+    
+
+<div class="masthead">
+  <div class="masthead__inner-wrap">
+    <div class="masthead__menu">
+      <nav id="site-nav" class="greedy-nav">
+        
+        <a class="site-title" href="/">
+          Mingxiang's blog
+          
+        </a>
+        <ul class="visible-links"></ul>
+        
+        <button class="greedy-nav__toggle hidden" type="button">
+          <span class="visually-hidden">Toggle menu</span>
+          <div class="navicon"></div>
+        </button>
+        <ul class="hidden-links hidden"></ul>
+      </nav>
+    </div>
+  </div>
+</div>
+
+
+    <div class="initial-content">
+      
+
+
+
+<div id="main" role="main">
+  
+
+
+  <article class="page" itemscope itemtype="https://schema.org/CreativeWork">
+    <meta itemprop="headline" content="Redis RDB internals">
+    <meta itemprop="description" content="This post aims to covering how Redis dumps in-memory data into a disk file.  Theversion of Redis used is 6.0.5.">
+    <meta itemprop="datePublished" content="2020-06-13T10:11:00+08:00">
+    
+
+    <div class="page__inner-wrap">
+      
+        <header>
+          <h1 id="page-title" class="page__title" itemprop="headline">Redis RDB internals
+</h1>
+          
+            <p class="page__meta"><i class="far fa-clock" aria-hidden="true"></i> 
+
+
+
+
+  5 minute read
+
+</p>
+          
+        </header>
+      
+
+      <section class="page__content" itemprop="text">
+        
+        <p>This post aims to covering how Redis dumps in-memory data into a disk file.  The
+version of Redis used is 6.0.5.</p>
+
+<p>First, let’s look at how Redis prepares for the dump. In <code class="highlighter-rouge">main</code> function, Redis
+initializes a global <code class="highlighter-rouge">redisServer</code> structure, registering a timer callback
+<code class="highlighter-rouge">serverCron</code> (should be scheduled per millisecond) in <code class="highlighter-rouge">aeEventLoop</code>(which is a
+member of <code class="highlighter-rouge">redisServer</code>). At the end, it starts an infinity loop to wait for
+some event to happen and execute.</p>
+
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>-&gt; main // src/server.c:4967L
+   -&gt; ...
+   -&gt; initServer // :5126L
+      -&gt; ...
+      -&gt; aeCreateTimeEvent(server.el, 1, serverCron, NULL, NULL) // :2877L
+      -&gt; ...
+  -&gt; ...
+  -&gt; aeMain(server.el) // :5173L
+</code></pre></div></div>
+
+<p class="notice--info"><strong>Tip:</strong> There are several <code class="highlighter-rouge">ae.c</code> and <code class="highlighter-rouge">ae_*.c</code> files in <code class="highlighter-rouge">src</code> directory, which are
+used to abstract out the event-driven API for different systems. The name <code class="highlighter-rouge">ae</code>
+may stand for <code class="highlighter-rouge">asynchronous event</code> or <code class="highlighter-rouge">another event</code>, or just <code class="highlighter-rouge">an event</code>
+mechanism.</p>
+
+<p>Let’s now look at how <code class="highlighter-rouge">aeMain</code> works. As we mentioned above, it repeatedly calls
+<code class="highlighter-rouge">aeProcessEvents</code> to process events.</p>
+
+<figure class="highlight">
+  <div class="snippet-header">
+    <div class="snippet-name"><span>src/ae.c</span></div>
+    <div class="snippet-actions">
+      <button class="snippet-action-copy" data-snippet="dm9pZCBhZU1haW4oYWVFdmVudExvb3AgKmV2ZW50TG9vcCkgewogICAgZXZl
+bnRMb29wLT5zdG9wID0gMDsKICAgIHdoaWxlICghZXZlbnRMb29wLT5zdG9w
+KSB7CiAgICAgICAgYWVQcm9jZXNzRXZlbnRzKGV2ZW50TG9vcCwgQUVfQUxM
+X0VWRU5UU3wKICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICBB
+RV9DQUxMX0JFRk9SRV9TTEVFUHwKICAgICAgICAgICAgICAgICAgICAgICAg
+ICAgICAgICAgICBBRV9DQUxMX0FGVEVSX1NMRUVQKTsKICAgIH0KfQ==
+"></button>
+    </div>
+  </div>
+  <pre><code class="language-c" data-lang="c"><table class="rouge-table"><tbody><tr><td class="gutter gl"><pre class="lineno">536
+537
+538
+539
+540
+541
+542
+543
+</pre></td><td class="code"><pre><span class="kt">void</span> <span class="nf">aeMain</span><span class="p">(</span><span class="n">aeEventLoop</span> <span class="o">*</span><span class="n">eventLoop</span><span class="p">)</span> <span class="p">{</span>
+    <span class="n">eventLoop</span><span class="o">-&gt;</span><span class="n">stop</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+    <span class="k">while</span> <span class="p">(</span><span class="o">!</span><span class="n">eventLoop</span><span class="o">-&gt;</span><span class="n">stop</span><span class="p">)</span> <span class="p">{</span>
+        <span class="n">aeProcessEvents</span><span class="p">(</span><span class="n">eventLoop</span><span class="p">,</span> <span class="n">AE_ALL_EVENTS</span><span class="o">|</span>
+                                   <span class="n">AE_CALL_BEFORE_SLEEP</span><span class="o">|</span>
+                                   <span class="n">AE_CALL_AFTER_SLEEP</span><span class="p">);</span>
+    <span class="p">}</span>
+<span class="p">}</span>
+</pre></td></tr></tbody></table></code></pre>
+</figure>
+
+<p>In <code class="highlighter-rouge">aeProcessEvents</code> function, it calculates the shortest time to wait before a
+timer event happens. It then waits for events on created file descriptors, with
+or without time out. Finally it calls <code class="highlighter-rouge">processTimeEvents</code> to check which timer
+callbacks should be called.</p>
+
+<figure class="highlight">
+  <div class="snippet-header">
+    <div class="snippet-name"><span>src/ae.c</span></div>
+    <div class="snippet-actions">
+      <button class="snippet-action-copy" data-snippet="aW50IGFlUHJvY2Vzc0V2ZW50cyhhZUV2ZW50TG9vcCAqZXZlbnRMb29wLCBp
+bnQgZmxhZ3MpCnsKICAgIC4uLgogICAgaWYgKGV2ZW50TG9vcC0+bWF4ZmQg
+IT0gLTEgfHwKICAgICAgICAoKGZsYWdzICYgQUVfVElNRV9FVkVOVFMpICYm
+ICEoZmxhZ3MgJiBBRV9ET05UX1dBSVQpKSkgewogICAgICAgIC4uLgoKICAg
+ICAgICBpZiAoZmxhZ3MgJiBBRV9USU1FX0VWRU5UUyAmJiAhKGZsYWdzICYg
+QUVfRE9OVF9XQUlUKSkKICAgICAgICAgICAgc2hvcnRlc3QgPSBhZVNlYXJj
+aE5lYXJlc3RUaW1lcihldmVudExvb3ApOwogICAgICAgIGlmIChzaG9ydGVz
+dCkgewogICAgICAgICAgICBsb25nIG5vd19zZWMsIG5vd19tczsKCiAgICAg
+ICAgICAgIGFlR2V0VGltZSgmbm93X3NlYywgJm5vd19tcyk7CiAgICAgICAg
+ICAgIHR2cCA9ICZ0djsKCiAgICAgICAgICAgIC8qIEhvdyBtYW55IG1pbGxp
+c2Vjb25kcyB3ZSBuZWVkIHRvIHdhaXQgZm9yIHRoZSBuZXh0CiAgICAgICAg
+ICAgICAqIHRpbWUgZXZlbnQgdG8gZmlyZT8gKi8KICAgICAgICAgICAgbG9u
+ZyBsb25nIG1zID0KICAgICAgICAgICAgICAgIChzaG9ydGVzdC0+d2hlbl9z
+ZWMgLSBub3dfc2VjKSoxMDAwICsKICAgICAgICAgICAgICAgIHNob3J0ZXN0
+LT53aGVuX21zIC0gbm93X21zOwoKICAgICAgICAgICAgaWYgKG1zID4gMCkg
+ewogICAgICAgICAgICAgICAgdHZwLT50dl9zZWMgPSBtcy8xMDAwOwogICAg
+ICAgICAgICAgICAgdHZwLT50dl91c2VjID0gKG1zICUgMTAwMCkqMTAwMDsK
+ICAgICAgICAgICAgfSBlbHNlIHsKICAgICAgICAgICAgICAgIHR2cC0+dHZf
+c2VjID0gMDsKICAgICAgICAgICAgICAgIHR2cC0+dHZfdXNlYyA9IDA7CiAg
+ICAgICAgICAgIH0KICAgICAgICB9IGVsc2UgewogICAgICAgICAgLi4uCiAg
+ICAgICAgfQogICAgICAgIC4uLgogICAgfQogICAgLyogQ2hlY2sgdGltZSBl
+dmVudHMgKi8KICAgIGlmIChmbGFncyAmIEFFX1RJTUVfRVZFTlRTKQogICAg
+ICAgIHByb2Nlc3NlZCArPSBwcm9jZXNzVGltZUV2ZW50cyhldmVudExvb3Ap
+OwoKICAgIHJldHVybiBwcm9jZXNzZWQ7IC8qIHJldHVybiB0aGUgbnVtYmVy
+IG9mIHByb2Nlc3NlZCBmaWxlL3RpbWUgZXZlbnRzICovCn0=
+"></button>
+    </div>
+  </div>
+  <pre><code class="language-c" data-lang="c"><table class="rouge-table"><tbody><tr><td class="gutter gl"><pre class="lineno">386
+387
+388
+389
+390
+391
+392
+393
+394
+395
+396
+397
+398
+399
+400
+401
+402
+403
+404
+405
+406
+407
+408
+409
+410
+411
+412
+413
+414
+415
+416
+417
+418
+419
+420
+421
+422
+423
+424
+</pre></td><td class="code"><pre><span class="kt">int</span> <span class="nf">aeProcessEvents</span><span class="p">(</span><span class="n">aeEventLoop</span> <span class="o">*</span><span class="n">eventLoop</span><span class="p">,</span> <span class="kt">int</span> <span class="n">flags</span><span class="p">)</span>
+<span class="p">{</span>
+    <span class="p">...</span>
+    <span class="k">if</span> <span class="p">(</span><span class="n">eventLoop</span><span class="o">-&gt;</span><span class="n">maxfd</span> <span class="o">!=</span> <span class="o">-</span><span class="mi">1</span> <span class="o">||</span>
+        <span class="p">((</span><span class="n">flags</span> <span class="o">&amp;</span> <span class="n">AE_TIME_EVENTS</span><span class="p">)</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="p">(</span><span class="n">flags</span> <span class="o">&amp;</span> <span class="n">AE_DONT_WAIT</span><span class="p">)))</span> <span class="p">{</span>
+        <span class="p">...</span>
+
+        <span class="k">if</span> <span class="p">(</span><span class="n">flags</span> <span class="o">&amp;</span> <span class="n">AE_TIME_EVENTS</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="p">(</span><span class="n">flags</span> <span class="o">&amp;</span> <span class="n">AE_DONT_WAIT</span><span class="p">))</span>
+            <span class="n">shortest</span> <span class="o">=</span> <span class="n">aeSearchNearestTimer</span><span class="p">(</span><span class="n">eventLoop</span><span class="p">);</span>
+        <span class="k">if</span> <span class="p">(</span><span class="n">shortest</span><span class="p">)</span> <span class="p">{</span>
+            <span class="kt">long</span> <span class="n">now_sec</span><span class="p">,</span> <span class="n">now_ms</span><span class="p">;</span>
+
+            <span class="n">aeGetTime</span><span class="p">(</span><span class="o">&amp;</span><span class="n">now_sec</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">now_ms</span><span class="p">);</span>
+            <span class="n">tvp</span> <span class="o">=</span> <span class="o">&amp;</span><span class="n">tv</span><span class="p">;</span>
+
+            <span class="cm">/* How many milliseconds we need to wait for the next
+             * time event to fire? */</span>
+            <span class="kt">long</span> <span class="kt">long</span> <span class="n">ms</span> <span class="o">=</span>
+                <span class="p">(</span><span class="n">shortest</span><span class="o">-&gt;</span><span class="n">when_sec</span> <span class="o">-</span> <span class="n">now_sec</span><span class="p">)</span><span class="o">*</span><span class="mi">1000</span> <span class="o">+</span>
+                <span class="n">shortest</span><span class="o">-&gt;</span><span class="n">when_ms</span> <span class="o">-</span> <span class="n">now_ms</span><span class="p">;</span>
+
+            <span class="k">if</span> <span class="p">(</span><span class="n">ms</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">)</span> <span class="p">{</span>
+                <span class="n">tvp</span><span class="o">-&gt;</span><span class="n">tv_sec</span> <span class="o">=</span> <span class="n">ms</span><span class="o">/</span><span class="mi">1000</span><span class="p">;</span>
+                <span class="n">tvp</span><span class="o">-&gt;</span><span class="n">tv_usec</span> <span class="o">=</span> <span class="p">(</span><span class="n">ms</span> <span class="o">%</span> <span class="mi">1000</span><span class="p">)</span><span class="o">*</span><span class="mi">1000</span><span class="p">;</span>
+            <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+                <span class="n">tvp</span><span class="o">-&gt;</span><span class="n">tv_sec</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+                <span class="n">tvp</span><span class="o">-&gt;</span><span class="n">tv_usec</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+            <span class="p">}</span>
+        <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+          <span class="p">...</span>
+        <span class="p">}</span>
+        <span class="p">...</span>
+    <span class="p">}</span>
+    <span class="cm">/* Check time events */</span>
+    <span class="k">if</span> <span class="p">(</span><span class="n">flags</span> <span class="o">&amp;</span> <span class="n">AE_TIME_EVENTS</span><span class="p">)</span>
+        <span class="n">processed</span> <span class="o">+=</span> <span class="n">processTimeEvents</span><span class="p">(</span><span class="n">eventLoop</span><span class="p">);</span>
+
+    <span class="k">return</span> <span class="n">processed</span><span class="p">;</span> <span class="cm">/* return the number of processed file/time events */</span>
+<span class="p">}</span>
+</pre></td></tr></tbody></table></code></pre>
+</figure>
+
+<p>In <code class="highlighter-rouge">processTimeEvents</code> function, it calls <code class="highlighter-rouge">te-&gt;timeProc</code> which is a function
+pointer registered before (in above situation, it’s <code class="highlighter-rouge">serverCron</code>).</p>
+
+<figure class="highlight">
+  <div class="snippet-header">
+    <div class="snippet-name"><span>src/ae.c</span></div>
+    <div class="snippet-actions">
+      <button class="snippet-action-copy" data-snippet="c3RhdGljIGludCBwcm9jZXNzVGltZUV2ZW50cyhhZUV2ZW50TG9vcCAqZXZl
+bnRMb29wKSB7CiAgICAuLi4KICAgIHRlID0gZXZlbnRMb29wLT50aW1lRXZl
+bnRIZWFkOwogICAgbWF4SWQgPSBldmVudExvb3AtPnRpbWVFdmVudE5leHRJ
+ZC0xOwogICAgd2hpbGUodGUpIHsKICAgICAgICAuLi4KICAgICAgICBhZUdl
+dFRpbWUoJm5vd19zZWMsICZub3dfbXMpOwogICAgICAgIGlmIChub3dfc2Vj
+ID4gdGUtPndoZW5fc2VjIHx8CiAgICAgICAgICAgIChub3dfc2VjID09IHRl
+LT53aGVuX3NlYyAmJiBub3dfbXMgPj0gdGUtPndoZW5fbXMpKQogICAgICAg
+IHsKICAgICAgICAgICAgaW50IHJldHZhbDsKCiAgICAgICAgICAgIGlkID0g
+dGUtPmlkOwogICAgICAgICAgICB0ZS0+cmVmY291bnQrKzsKICAgICAgICAg
+ICAgcmV0dmFsID0gdGUtPnRpbWVQcm9jKGV2ZW50TG9vcCwgaWQsIHRlLT5j
+bGllbnREYXRhKTsKICAgICAgICAgICAgdGUtPnJlZmNvdW50LS07CiAgICAg
+ICAgICAgIHByb2Nlc3NlZCsrOwogICAgICAgICAgICBpZiAocmV0dmFsICE9
+IEFFX05PTU9SRSkgewogICAgICAgICAgICAgICAgYWVBZGRNaWxsaXNlY29u
+ZHNUb05vdyhyZXR2YWwsJnRlLT53aGVuX3NlYywmdGUtPndoZW5fbXMpOwog
+ICAgICAgICAgICB9IGVsc2UgewogICAgICAgICAgICAgICAgdGUtPmlkID0g
+QUVfREVMRVRFRF9FVkVOVF9JRDsKICAgICAgICAgICAgfQogICAgICAgIH0K
+ICAgICAgICB0ZSA9IHRlLT5uZXh0OwogICAgfQogICAgcmV0dXJuIHByb2Nl
+c3NlZDsKfQ==
+"></button>
+    </div>
+  </div>
+  <pre><code class="language-c" data-lang="c"><table class="rouge-table"><tbody><tr><td class="gutter gl"><pre class="lineno">288
+289
+290
+291
+292
+293
+294
+295
+296
+297
+298
+299
+300
+301
+302
+303
+304
+305
+306
+307
+308
+309
+310
+311
+312
+313
+314
+</pre></td><td class="code"><pre><span class="k">static</span> <span class="kt">int</span> <span class="nf">processTimeEvents</span><span class="p">(</span><span class="n">aeEventLoop</span> <span class="o">*</span><span class="n">eventLoop</span><span class="p">)</span> <span class="p">{</span>
+    <span class="p">...</span>
+    <span class="n">te</span> <span class="o">=</span> <span class="n">eventLoop</span><span class="o">-&gt;</span><span class="n">timeEventHead</span><span class="p">;</span>
+    <span class="n">maxId</span> <span class="o">=</span> <span class="n">eventLoop</span><span class="o">-&gt;</span><span class="n">timeEventNextId</span><span class="o">-</span><span class="mi">1</span><span class="p">;</span>
+    <span class="k">while</span><span class="p">(</span><span class="n">te</span><span class="p">)</span> <span class="p">{</span>
+        <span class="p">...</span>
+        <span class="n">aeGetTime</span><span class="p">(</span><span class="o">&amp;</span><span class="n">now_sec</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">now_ms</span><span class="p">);</span>
+        <span class="k">if</span> <span class="p">(</span><span class="n">now_sec</span> <span class="o">&gt;</span> <span class="n">te</span><span class="o">-&gt;</span><span class="n">when_sec</span> <span class="o">||</span>
+            <span class="p">(</span><span class="n">now_sec</span> <span class="o">==</span> <span class="n">te</span><span class="o">-&gt;</span><span class="n">when_sec</span> <span class="o">&amp;&amp;</span> <span class="n">now_ms</span> <span class="o">&gt;=</span> <span class="n">te</span><span class="o">-&gt;</span><span class="n">when_ms</span><span class="p">))</span>
+        <span class="p">{</span>
+            <span class="kt">int</span> <span class="n">retval</span><span class="p">;</span>
+
+            <span class="n">id</span> <span class="o">=</span> <span class="n">te</span><span class="o">-&gt;</span><span class="n">id</span><span class="p">;</span>
+            <span class="n">te</span><span class="o">-&gt;</span><span class="n">refcount</span><span class="o">++</span><span class="p">;</span>
+            <span class="n">retval</span> <span class="o">=</span> <span class="n">te</span><span class="o">-&gt;</span><span class="n">timeProc</span><span class="p">(</span><span class="n">eventLoop</span><span class="p">,</span> <span class="n">id</span><span class="p">,</span> <span class="n">te</span><span class="o">-&gt;</span><span class="n">clientData</span><span class="p">);</span>
+            <span class="n">te</span><span class="o">-&gt;</span><span class="n">refcount</span><span class="o">--</span><span class="p">;</span>
+            <span class="n">processed</span><span class="o">++</span><span class="p">;</span>
+            <span class="k">if</span> <span class="p">(</span><span class="n">retval</span> <span class="o">!=</span> <span class="n">AE_NOMORE</span><span class="p">)</span> <span class="p">{</span>
+                <span class="n">aeAddMillisecondsToNow</span><span class="p">(</span><span class="n">retval</span><span class="p">,</span><span class="o">&amp;</span><span class="n">te</span><span class="o">-&gt;</span><span class="n">when_sec</span><span class="p">,</span><span class="o">&amp;</span><span class="n">te</span><span class="o">-&gt;</span><span class="n">when_ms</span><span class="p">);</span>
+            <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+                <span class="n">te</span><span class="o">-&gt;</span><span class="n">id</span> <span class="o">=</span> <span class="n">AE_DELETED_EVENT_ID</span><span class="p">;</span>
+            <span class="p">}</span>
+        <span class="p">}</span>
+        <span class="n">te</span> <span class="o">=</span> <span class="n">te</span><span class="o">-&gt;</span><span class="n">next</span><span class="p">;</span>
+    <span class="p">}</span>
+    <span class="k">return</span> <span class="n">processed</span><span class="p">;</span>
+<span class="p">}</span>
+</pre></td></tr></tbody></table></code></pre>
+</figure>
+
+<p>We now come to <code class="highlighter-rouge">serverCron</code>. <code class="highlighter-rouge">serverCron</code> is a versatile function that is used
+to do a number of things that need to be done asynchronously, including:</p>
+
+<ul>
+  <li>Remove expired keys</li>
+  <li>Dump in-memory data into a disk file</li>
+  <li>Replication reconnection</li>
+  <li>…</li>
+</ul>
+
+<p>In this post, we only focus on data dump. In <code class="highlighter-rouge">redis.conf</code>, we can use <code class="highlighter-rouge">save</code>
+directive multiple times to specify when to save the db on disk. For example:</p>
+
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>save 900 1
+save 300 10
+save 60 10000
+</code></pre></div></div>
+
+<p>In the above example, saveing on disk will happen either:</p>
+
+<ul>
+  <li>After 900 seconds (15 min) if at least 1 key changed</li>
+  <li>After 300 seconds (5 min) if at least 10 keys changed</li>
+  <li>After 60 seconds if at least 10000 keys changed</li>
+</ul>
+
+<p>On server initialization, the <code class="highlighter-rouge">save</code> directives are parsed into a list of
+<code class="highlighter-rouge">saveparam</code> stored in the global <code class="highlighter-rouge">redisServer</code> structure. So here in
+<code class="highlighter-rouge">serverCron</code> function, it iterates over the <code class="highlighter-rouge">saveparams</code> list to check if it
+needs to call <code class="highlighter-rouge">rdbSaveBackground</code>.</p>
+
+<figure class="highlight">
+  <div class="snippet-header">
+    <div class="snippet-name"><span>src/server.c</span></div>
+    <div class="snippet-actions">
+      <button class="snippet-action-copy" data-snippet="aW50IHNlcnZlckNyb24oc3RydWN0IGFlRXZlbnRMb29wICpldmVudExvb3As
+IGxvbmcgbG9uZyBpZCwgdm9pZCAqY2xpZW50RGF0YSkgewogICAgLi4uCgog
+ICAgICAgIC8qIElmIHRoZXJlIGlzIG5vdCBhIGJhY2tncm91bmQgc2F2aW5n
+L3Jld3JpdGUgaW4gcHJvZ3Jlc3MgY2hlY2sgaWYKICAgICAgICAgKiB3ZSBo
+YXZlIHRvIHNhdmUvcmV3cml0ZSBub3cuICovCiAgICAgICAgZm9yIChqID0g
+MDsgaiA8IHNlcnZlci5zYXZlcGFyYW1zbGVuOyBqKyspIHsKICAgICAgICAg
+ICAgc3RydWN0IHNhdmVwYXJhbSAqc3AgPSBzZXJ2ZXIuc2F2ZXBhcmFtcytq
+OwoKICAgICAgICAgICAgLyogU2F2ZSBpZiB3ZSByZWFjaGVkIHRoZSBnaXZl
+biBhbW91bnQgb2YgY2hhbmdlcywKICAgICAgICAgICAgICogdGhlIGdpdmVu
+IGFtb3VudCBvZiBzZWNvbmRzLCBhbmQgaWYgdGhlIGxhdGVzdCBiZ3NhdmUg
+d2FzCiAgICAgICAgICAgICAqIHN1Y2Nlc3NmdWwgb3IgaWYsIGluIGNhc2Ug
+b2YgYW4gZXJyb3IsIGF0IGxlYXN0CiAgICAgICAgICAgICAqIENPTkZJR19C
+R1NBVkVfUkVUUllfREVMQVkgc2Vjb25kcyBhbHJlYWR5IGVsYXBzZWQuICov
+CiAgICAgICAgICAgIGlmIChzZXJ2ZXIuZGlydHkgPj0gc3AtPmNoYW5nZXMg
+JiYKICAgICAgICAgICAgICAgIHNlcnZlci51bml4dGltZS1zZXJ2ZXIubGFz
+dHNhdmUgPiBzcC0+c2Vjb25kcyAmJgogICAgICAgICAgICAgICAgKHNlcnZl
+ci51bml4dGltZS1zZXJ2ZXIubGFzdGJnc2F2ZV90cnkgPgogICAgICAgICAg
+ICAgICAgIENPTkZJR19CR1NBVkVfUkVUUllfREVMQVkgfHwKICAgICAgICAg
+ICAgICAgICBzZXJ2ZXIubGFzdGJnc2F2ZV9zdGF0dXMgPT0gQ19PSykpCiAg
+ICAgICAgICAgIHsKICAgICAgICAgICAgICAgIHNlcnZlckxvZyhMTF9OT1RJ
+Q0UsIiVkIGNoYW5nZXMgaW4gJWQgc2Vjb25kcy4gU2F2aW5nLi4uIiwKICAg
+ICAgICAgICAgICAgICAgICBzcC0+Y2hhbmdlcywgKGludClzcC0+c2Vjb25k
+cyk7CiAgICAgICAgICAgICAgICByZGJTYXZlSW5mbyByc2ksICpyc2lwdHI7
+CiAgICAgICAgICAgICAgICByc2lwdHIgPSByZGJQb3B1bGF0ZVNhdmVJbmZv
+KCZyc2kpOwogICAgICAgICAgICAgICAgcmRiU2F2ZUJhY2tncm91bmQoc2Vy
+dmVyLnJkYl9maWxlbmFtZSxyc2lwdHIpOwogICAgICAgICAgICAgICAgYnJl
+YWs7CiAgICAgICAgICAgIH0KICAgICAgICB9CgogIC4uLgp9
+"></button>
+    </div>
+  </div>
+  <pre><code class="language-c" data-lang="c"><table class="rouge-table"><tbody><tr><td class="gutter gl"><pre class="lineno">1845
+1846
+1847
+1848
+1849
+1850
+1851
+1852
+1853
+1854
+1855
+1856
+1857
+1858
+1859
+1860
+1861
+1862
+1863
+1864
+1865
+1866
+1867
+1868
+1869
+1870
+1871
+1872
+1873
+</pre></td><td class="code"><pre><span class="kt">int</span> <span class="nf">serverCron</span><span class="p">(</span><span class="k">struct</span> <span class="n">aeEventLoop</span> <span class="o">*</span><span class="n">eventLoop</span><span class="p">,</span> <span class="kt">long</span> <span class="kt">long</span> <span class="n">id</span><span class="p">,</span> <span class="kt">void</span> <span class="o">*</span><span class="n">clientData</span><span class="p">)</span> <span class="p">{</span>
+    <span class="p">...</span>
+
+        <span class="cm">/* If there is not a background saving/rewrite in progress check if
+         * we have to save/rewrite now. */</span>
+        <span class="k">for</span> <span class="p">(</span><span class="n">j</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">j</span> <span class="o">&lt;</span> <span class="n">server</span><span class="p">.</span><span class="n">saveparamslen</span><span class="p">;</span> <span class="n">j</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+            <span class="k">struct</span> <span class="n">saveparam</span> <span class="o">*</span><span class="n">sp</span> <span class="o">=</span> <span class="n">server</span><span class="p">.</span><span class="n">saveparams</span><span class="o">+</span><span class="n">j</span><span class="p">;</span>
+
+            <span class="cm">/* Save if we reached the given amount of changes,
+             * the given amount of seconds, and if the latest bgsave was
+             * successful or if, in case of an error, at least
+             * CONFIG_BGSAVE_RETRY_DELAY seconds already elapsed. */</span>
+            <span class="k">if</span> <span class="p">(</span><span class="n">server</span><span class="p">.</span><span class="n">dirty</span> <span class="o">&gt;=</span> <span class="n">sp</span><span class="o">-&gt;</span><span class="n">changes</span> <span class="o">&amp;&amp;</span>
+                <span class="n">server</span><span class="p">.</span><span class="n">unixtime</span><span class="o">-</span><span class="n">server</span><span class="p">.</span><span class="n">lastsave</span> <span class="o">&gt;</span> <span class="n">sp</span><span class="o">-&gt;</span><span class="n">seconds</span> <span class="o">&amp;&amp;</span>
+                <span class="p">(</span><span class="n">server</span><span class="p">.</span><span class="n">unixtime</span><span class="o">-</span><span class="n">server</span><span class="p">.</span><span class="n">lastbgsave_try</span> <span class="o">&gt;</span>
+                 <span class="n">CONFIG_BGSAVE_RETRY_DELAY</span> <span class="o">||</span>
+                 <span class="n">server</span><span class="p">.</span><span class="n">lastbgsave_status</span> <span class="o">==</span> <span class="n">C_OK</span><span class="p">))</span>
+            <span class="p">{</span>
+                <span class="n">serverLog</span><span class="p">(</span><span class="n">LL_NOTICE</span><span class="p">,</span><span class="s">"%d changes in %d seconds. Saving..."</span><span class="p">,</span>
+                    <span class="n">sp</span><span class="o">-&gt;</span><span class="n">changes</span><span class="p">,</span> <span class="p">(</span><span class="kt">int</span><span class="p">)</span><span class="n">sp</span><span class="o">-&gt;</span><span class="n">seconds</span><span class="p">);</span>
+                <span class="n">rdbSaveInfo</span> <span class="n">rsi</span><span class="p">,</span> <span class="o">*</span><span class="n">rsiptr</span><span class="p">;</span>
+                <span class="n">rsiptr</span> <span class="o">=</span> <span class="n">rdbPopulateSaveInfo</span><span class="p">(</span><span class="o">&amp;</span><span class="n">rsi</span><span class="p">);</span>
+                <span class="n">rdbSaveBackground</span><span class="p">(</span><span class="n">server</span><span class="p">.</span><span class="n">rdb_filename</span><span class="p">,</span><span class="n">rsiptr</span><span class="p">);</span>
+                <span class="k">break</span><span class="p">;</span>
+            <span class="p">}</span>
+        <span class="p">}</span>
+
+  <span class="p">...</span>
+<span class="p">}</span>
+</pre></td></tr></tbody></table></code></pre>
+</figure>
+
+<p>In <code class="highlighter-rouge">rdbSaveBackground</code> function, it calls <code class="highlighter-rouge">redisFork</code> to create a child process,
+and the child will do the real saving job. You may worry that because a new
+process is created, the totally used memory will become 2x. Don’t worry, because
+of COW (copy-on-write), unless writing to memory operation happens, the memory
+won’t become 2x.</p>
+
+<figure class="highlight">
+  <div class="snippet-header">
+    <div class="snippet-name"><span>src/rdb.c</span></div>
+    <div class="snippet-actions">
+      <button class="snippet-action-copy" data-snippet="aW50IHJkYlNhdmVCYWNrZ3JvdW5kKGNoYXIgKmZpbGVuYW1lLCByZGJTYXZl
+SW5mbyAqcnNpKSB7CiAgICAuLi4KCiAgICBpZiAoKGNoaWxkcGlkID0gcmVk
+aXNGb3JrKCkpID09IDApIHsKICAgICAgICBpbnQgcmV0dmFsOwoKICAgICAg
+ICAvKiBDaGlsZCAqLwogICAgICAgIHJlZGlzU2V0UHJvY1RpdGxlKCJyZWRp
+cy1yZGItYmdzYXZlIik7CiAgICAgICAgcmVkaXNTZXRDcHVBZmZpbml0eShz
+ZXJ2ZXIuYmdzYXZlX2NwdWxpc3QpOwogICAgICAgIHJldHZhbCA9IHJkYlNh
+dmUoZmlsZW5hbWUscnNpKTsKICAgICAgICBpZiAocmV0dmFsID09IENfT0sp
+IHsKICAgICAgICAgICAgc2VuZENoaWxkQ09XSW5mbyhDSElMRF9JTkZPX1RZ
+UEVfUkRCLCAiUkRCIik7CiAgICAgICAgfQogICAgICAgIGV4aXRGcm9tQ2hp
+bGQoKHJldHZhbCA9PSBDX09LKSA/IDAgOiAxKTsKICAgIH0gZWxzZSB7CiAg
+ICAgICAgLi4uCiAgICB9CiAgICByZXR1cm4gQ19PSzsgLyogdW5yZWFjaGVk
+ICovCn0=
+"></button>
+    </div>
+  </div>
+  <pre><code class="language-c" data-lang="c"><table class="rouge-table"><tbody><tr><td class="gutter gl"><pre class="lineno">1340
+1341
+1342
+1343
+1344
+1345
+1346
+1347
+1348
+1349
+1350
+1351
+1352
+1353
+1354
+1355
+1356
+1357
+1358
+</pre></td><td class="code"><pre><span class="kt">int</span> <span class="nf">rdbSaveBackground</span><span class="p">(</span><span class="kt">char</span> <span class="o">*</span><span class="n">filename</span><span class="p">,</span> <span class="n">rdbSaveInfo</span> <span class="o">*</span><span class="n">rsi</span><span class="p">)</span> <span class="p">{</span>
+    <span class="p">...</span>
+
+    <span class="k">if</span> <span class="p">((</span><span class="n">childpid</span> <span class="o">=</span> <span class="n">redisFork</span><span class="p">())</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span> <span class="p">{</span>
+        <span class="kt">int</span> <span class="n">retval</span><span class="p">;</span>
+
+        <span class="cm">/* Child */</span>
+        <span class="n">redisSetProcTitle</span><span class="p">(</span><span class="s">"redis-rdb-bgsave"</span><span class="p">);</span>
+        <span class="n">redisSetCpuAffinity</span><span class="p">(</span><span class="n">server</span><span class="p">.</span><span class="n">bgsave_cpulist</span><span class="p">);</span>
+        <span class="n">retval</span> <span class="o">=</span> <span class="n">rdbSave</span><span class="p">(</span><span class="n">filename</span><span class="p">,</span><span class="n">rsi</span><span class="p">);</span>
+        <span class="k">if</span> <span class="p">(</span><span class="n">retval</span> <span class="o">==</span> <span class="n">C_OK</span><span class="p">)</span> <span class="p">{</span>
+            <span class="n">sendChildCOWInfo</span><span class="p">(</span><span class="n">CHILD_INFO_TYPE_RDB</span><span class="p">,</span> <span class="s">"RDB"</span><span class="p">);</span>
+        <span class="p">}</span>
+        <span class="n">exitFromChild</span><span class="p">((</span><span class="n">retval</span> <span class="o">==</span> <span class="n">C_OK</span><span class="p">)</span> <span class="o">?</span> <span class="mi">0</span> <span class="o">:</span> <span class="mi">1</span><span class="p">);</span>
+    <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+        <span class="p">...</span>
+    <span class="p">}</span>
+    <span class="k">return</span> <span class="n">C_OK</span><span class="p">;</span> <span class="cm">/* unreached */</span>
+<span class="p">}</span>
+</pre></td></tr></tbody></table></code></pre>
+</figure>
+
+<p>So let’s look at the function <code class="highlighter-rouge">rdbSave</code> which dose the real data dump.</p>
+
+<p>In <code class="highlighter-rouge">rdbSave</code>, it first creates a temporary file, and then writes header information in the
+file, iterates over each database and writes database information and key-value
+pairs into the file, finally appends <code class="highlighter-rouge">EOF</code> marker and an 8-bytes checksum. At
+the end, it closes the temporary file, and renames it to the final filename.</p>
+
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>-&gt; rdbSave // src/rdb.c:1273L
+   -&gt; fp = fopen(tmpfile,"w");
+   -&gt; rdbSaveRio(&amp;rdb,&amp;error,RDBFLAGS_NONE,rsi)
+      -&gt; snprintf(magic,sizeof(magic),"REDIS%04d",RDB_VERSION)
+      -&gt; rdbWriteRaw(rdb,magic,9)
+      -&gt; rdbSaveInfoAuxFields(rdb,rdbflags,rsi)
+      -&gt; for (j = 0; j &lt; server.dbnum; j++)
+         -&gt; rdbSaveType(rdb,RDB_OPCODE_SELECTDB)
+         -&gt; rdbSaveLen(rdb,j)
+         -&gt; rdbSaveType(rdb,RDB_OPCODE_RESIZEDB)
+         -&gt; rdbSaveLen(rdb,db_size)
+         -&gt; rdbSaveLen(rdb,expires_size)
+         -&gt; while((de = dictNext(di)) != NULL)
+            -&gt; rdbSaveKeyValuePair(rdb,&amp;key,o,expire)
+      -&gt; rdbSaveType(rdb,RDB_OPCODE_EOF)
+      -&gt; rioWrite(rdb,&amp;cksum,8)
+   -&gt; fclose(fp)
+   -&gt; rename(tmpfile,filename)
+</code></pre></div></div>
+
+        
+      </section>
+
+      <footer class="page__meta">
+        
+        
+
+
+        
+          <p class="page__date"><strong><i class="fas fa-fw fa-calendar-alt" aria-hidden="true"></i> Updated:</strong> <time datetime="2020-06-13T10:11:00+08:00">June 13, 2020</time></p>
+        
+      </footer>
+
+      
+
+      
+  <nav class="pagination">
+    
+      <a href="/prometheus-tsdb-internals.html" class="pagination--pager" title="Prometheus TSDB internals
+">Previous</a>
+    
+    
+      <a href="#" class="pagination--pager disabled">Next</a>
+    
+  </nav>
+
+    </div>
+
+    
+  </article>
+
+  
+  
+</div>
+
+    </div>
+
+    
+
+    <div id="footer" class="page__footer">
+      <footer>
+        <!-- start custom footer snippets -->
+
+<!-- end custom footer snippets -->
+        <div class="page__footer-follow">
+  <ul class="social-icons">
+    
+
+    
+
+    <li><a href="/feed.xml"><i class="fas fa-fw fa-rss-square" aria-hidden="true"></i> Feed</a></li>
+  </ul>
+</div>
+
+<div class="page__footer-copyright">&copy; 2020 Mingxiang's blog. Powered by <a href="https://jekyllrb.com" rel="nofollow">Jekyll</a> &amp; <a href="https://mademistakes.com/work/minimal-mistakes-jekyll-theme/" rel="nofollow">Minimal Mistakes</a>.</div>
+
+      </footer>
+    </div>
+
+    
+  
+    <script src="/assets/scripts/snippet.js"></script>
+  
+
+
+
+
+
+
+
+    
+
+
+
+
+
+
+
+  </body>
+</html>

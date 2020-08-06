@@ -1,4 +1,483 @@
-<?xml version="1.0" encoding="utf-8"?><feed xmlns="http://www.w3.org/2005/Atom" ><generator uri="https://jekyllrb.com/" version="3.8.5">Jekyll</generator><link href="https://uzxmx.github.io/feed.xml" rel="self" type="application/atom+xml" /><link href="https://uzxmx.github.io/" rel="alternate" type="text/html" /><updated>2020-05-29T18:12:22+08:00</updated><id>https://uzxmx.github.io/feed.xml</id><title type="html">Mingxiang’s blog</title><subtitle>A blog that contains articles about programming languages, open source frameworks, and some technical how-to and tricks.</subtitle><entry><title type="html">Prometheus TSDB internals</title><link href="https://uzxmx.github.io/prometheus-tsdb-internals.html" rel="alternate" type="text/html" title="Prometheus TSDB internals" /><published>2020-05-24T20:15:00+08:00</published><updated>2020-05-24T20:15:00+08:00</updated><id>https://uzxmx.github.io/prometheus-tsdb-internals</id><content type="html" xml:base="https://uzxmx.github.io/prometheus-tsdb-internals.html">&lt;p&gt;Prometheus has local and remote storage. At the beginning, it creates a local
+<?xml version="1.0" encoding="utf-8"?><feed xmlns="http://www.w3.org/2005/Atom" ><generator uri="https://jekyllrb.com/" version="3.8.5">Jekyll</generator><link href="https://uzxmx.github.io/feed.xml" rel="self" type="application/atom+xml" /><link href="https://uzxmx.github.io/" rel="alternate" type="text/html" /><updated>2020-08-06T09:18:30+08:00</updated><id>https://uzxmx.github.io/feed.xml</id><title type="html">Mingxiang’s blog</title><subtitle>A blog that contains articles about programming languages, open source frameworks, and some technical how-to and tricks.</subtitle><entry><title type="html">Redis RDB internals</title><link href="https://uzxmx.github.io/redis-rdb-internals.html" rel="alternate" type="text/html" title="Redis RDB internals" /><published>2020-06-13T10:11:00+08:00</published><updated>2020-06-13T10:11:00+08:00</updated><id>https://uzxmx.github.io/redis-rdb-internals</id><content type="html" xml:base="https://uzxmx.github.io/redis-rdb-internals.html">&lt;p&gt;This post aims to covering how Redis dumps in-memory data into a disk file.  The
+version of Redis used is 6.0.5.&lt;/p&gt;
+
+&lt;p&gt;First, let’s look at how Redis prepares for the dump. In &lt;code class=&quot;highlighter-rouge&quot;&gt;main&lt;/code&gt; function, Redis
+initializes a global &lt;code class=&quot;highlighter-rouge&quot;&gt;redisServer&lt;/code&gt; structure, registering a timer callback
+&lt;code class=&quot;highlighter-rouge&quot;&gt;serverCron&lt;/code&gt; (should be scheduled per millisecond) in &lt;code class=&quot;highlighter-rouge&quot;&gt;aeEventLoop&lt;/code&gt;(which is a
+member of &lt;code class=&quot;highlighter-rouge&quot;&gt;redisServer&lt;/code&gt;). At the end, it starts an infinity loop to wait for
+some event to happen and execute.&lt;/p&gt;
+
+&lt;div class=&quot;highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;-&amp;gt; main // src/server.c:4967L
+   -&amp;gt; ...
+   -&amp;gt; initServer // :5126L
+      -&amp;gt; ...
+      -&amp;gt; aeCreateTimeEvent(server.el, 1, serverCron, NULL, NULL) // :2877L
+      -&amp;gt; ...
+  -&amp;gt; ...
+  -&amp;gt; aeMain(server.el) // :5173L
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p class=&quot;notice--info&quot;&gt;&lt;strong&gt;Tip:&lt;/strong&gt; There are several &lt;code class=&quot;highlighter-rouge&quot;&gt;ae.c&lt;/code&gt; and &lt;code class=&quot;highlighter-rouge&quot;&gt;ae_*.c&lt;/code&gt; files in &lt;code class=&quot;highlighter-rouge&quot;&gt;src&lt;/code&gt; directory, which are
+used to abstract out the event-driven API for different systems. The name &lt;code class=&quot;highlighter-rouge&quot;&gt;ae&lt;/code&gt;
+may stand for &lt;code class=&quot;highlighter-rouge&quot;&gt;asynchronous event&lt;/code&gt; or &lt;code class=&quot;highlighter-rouge&quot;&gt;another event&lt;/code&gt;, or just &lt;code class=&quot;highlighter-rouge&quot;&gt;an event&lt;/code&gt;
+mechanism.&lt;/p&gt;
+
+&lt;p&gt;Let’s now look at how &lt;code class=&quot;highlighter-rouge&quot;&gt;aeMain&lt;/code&gt; works. As we mentioned above, it repeatedly calls
+&lt;code class=&quot;highlighter-rouge&quot;&gt;aeProcessEvents&lt;/code&gt; to process events.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;
+  &lt;div class=&quot;snippet-header&quot;&gt;
+    &lt;div class=&quot;snippet-name&quot;&gt;&lt;span&gt;src/ae.c&lt;/span&gt;&lt;/div&gt;
+    &lt;div class=&quot;snippet-actions&quot;&gt;
+      &lt;button class=&quot;snippet-action-copy&quot; data-snippet=&quot;dm9pZCBhZU1haW4oYWVFdmVudExvb3AgKmV2ZW50TG9vcCkgewogICAgZXZl
+bnRMb29wLT5zdG9wID0gMDsKICAgIHdoaWxlICghZXZlbnRMb29wLT5zdG9w
+KSB7CiAgICAgICAgYWVQcm9jZXNzRXZlbnRzKGV2ZW50TG9vcCwgQUVfQUxM
+X0VWRU5UU3wKICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICBB
+RV9DQUxMX0JFRk9SRV9TTEVFUHwKICAgICAgICAgICAgICAgICAgICAgICAg
+ICAgICAgICAgICBBRV9DQUxMX0FGVEVSX1NMRUVQKTsKICAgIH0KfQ==
+&quot;&gt;&lt;/button&gt;
+    &lt;/div&gt;
+  &lt;/div&gt;
+  &lt;pre&gt;&lt;code class=&quot;language-c&quot; data-lang=&quot;c&quot;&gt;&lt;table class=&quot;rouge-table&quot;&gt;&lt;tbody&gt;&lt;tr&gt;&lt;td class=&quot;gutter gl&quot;&gt;&lt;pre class=&quot;lineno&quot;&gt;536
+537
+538
+539
+540
+541
+542
+543
+&lt;/pre&gt;&lt;/td&gt;&lt;td class=&quot;code&quot;&gt;&lt;pre&gt;&lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;aeMain&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;aeEventLoop&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;eventLoop&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+    &lt;span class=&quot;n&quot;&gt;eventLoop&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;stop&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+    &lt;span class=&quot;k&quot;&gt;while&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;!&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;eventLoop&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;stop&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+        &lt;span class=&quot;n&quot;&gt;aeProcessEvents&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;eventLoop&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;AE_ALL_EVENTS&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;|&lt;/span&gt;
+                                   &lt;span class=&quot;n&quot;&gt;AE_CALL_BEFORE_SLEEP&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;|&lt;/span&gt;
+                                   &lt;span class=&quot;n&quot;&gt;AE_CALL_AFTER_SLEEP&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+    &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+&lt;/pre&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/tbody&gt;&lt;/table&gt;&lt;/code&gt;&lt;/pre&gt;
+&lt;/figure&gt;
+
+&lt;p&gt;In &lt;code class=&quot;highlighter-rouge&quot;&gt;aeProcessEvents&lt;/code&gt; function, it calculates the shortest time to wait before a
+timer event happens. It then waits for events on created file descriptors, with
+or without time out. Finally it calls &lt;code class=&quot;highlighter-rouge&quot;&gt;processTimeEvents&lt;/code&gt; to check which timer
+callbacks should be called.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;
+  &lt;div class=&quot;snippet-header&quot;&gt;
+    &lt;div class=&quot;snippet-name&quot;&gt;&lt;span&gt;src/ae.c&lt;/span&gt;&lt;/div&gt;
+    &lt;div class=&quot;snippet-actions&quot;&gt;
+      &lt;button class=&quot;snippet-action-copy&quot; data-snippet=&quot;aW50IGFlUHJvY2Vzc0V2ZW50cyhhZUV2ZW50TG9vcCAqZXZlbnRMb29wLCBp
+bnQgZmxhZ3MpCnsKICAgIC4uLgogICAgaWYgKGV2ZW50TG9vcC0+bWF4ZmQg
+IT0gLTEgfHwKICAgICAgICAoKGZsYWdzICYgQUVfVElNRV9FVkVOVFMpICYm
+ICEoZmxhZ3MgJiBBRV9ET05UX1dBSVQpKSkgewogICAgICAgIC4uLgoKICAg
+ICAgICBpZiAoZmxhZ3MgJiBBRV9USU1FX0VWRU5UUyAmJiAhKGZsYWdzICYg
+QUVfRE9OVF9XQUlUKSkKICAgICAgICAgICAgc2hvcnRlc3QgPSBhZVNlYXJj
+aE5lYXJlc3RUaW1lcihldmVudExvb3ApOwogICAgICAgIGlmIChzaG9ydGVz
+dCkgewogICAgICAgICAgICBsb25nIG5vd19zZWMsIG5vd19tczsKCiAgICAg
+ICAgICAgIGFlR2V0VGltZSgmbm93X3NlYywgJm5vd19tcyk7CiAgICAgICAg
+ICAgIHR2cCA9ICZ0djsKCiAgICAgICAgICAgIC8qIEhvdyBtYW55IG1pbGxp
+c2Vjb25kcyB3ZSBuZWVkIHRvIHdhaXQgZm9yIHRoZSBuZXh0CiAgICAgICAg
+ICAgICAqIHRpbWUgZXZlbnQgdG8gZmlyZT8gKi8KICAgICAgICAgICAgbG9u
+ZyBsb25nIG1zID0KICAgICAgICAgICAgICAgIChzaG9ydGVzdC0+d2hlbl9z
+ZWMgLSBub3dfc2VjKSoxMDAwICsKICAgICAgICAgICAgICAgIHNob3J0ZXN0
+LT53aGVuX21zIC0gbm93X21zOwoKICAgICAgICAgICAgaWYgKG1zID4gMCkg
+ewogICAgICAgICAgICAgICAgdHZwLT50dl9zZWMgPSBtcy8xMDAwOwogICAg
+ICAgICAgICAgICAgdHZwLT50dl91c2VjID0gKG1zICUgMTAwMCkqMTAwMDsK
+ICAgICAgICAgICAgfSBlbHNlIHsKICAgICAgICAgICAgICAgIHR2cC0+dHZf
+c2VjID0gMDsKICAgICAgICAgICAgICAgIHR2cC0+dHZfdXNlYyA9IDA7CiAg
+ICAgICAgICAgIH0KICAgICAgICB9IGVsc2UgewogICAgICAgICAgLi4uCiAg
+ICAgICAgfQogICAgICAgIC4uLgogICAgfQogICAgLyogQ2hlY2sgdGltZSBl
+dmVudHMgKi8KICAgIGlmIChmbGFncyAmIEFFX1RJTUVfRVZFTlRTKQogICAg
+ICAgIHByb2Nlc3NlZCArPSBwcm9jZXNzVGltZUV2ZW50cyhldmVudExvb3Ap
+OwoKICAgIHJldHVybiBwcm9jZXNzZWQ7IC8qIHJldHVybiB0aGUgbnVtYmVy
+IG9mIHByb2Nlc3NlZCBmaWxlL3RpbWUgZXZlbnRzICovCn0=
+&quot;&gt;&lt;/button&gt;
+    &lt;/div&gt;
+  &lt;/div&gt;
+  &lt;pre&gt;&lt;code class=&quot;language-c&quot; data-lang=&quot;c&quot;&gt;&lt;table class=&quot;rouge-table&quot;&gt;&lt;tbody&gt;&lt;tr&gt;&lt;td class=&quot;gutter gl&quot;&gt;&lt;pre class=&quot;lineno&quot;&gt;386
+387
+388
+389
+390
+391
+392
+393
+394
+395
+396
+397
+398
+399
+400
+401
+402
+403
+404
+405
+406
+407
+408
+409
+410
+411
+412
+413
+414
+415
+416
+417
+418
+419
+420
+421
+422
+423
+424
+&lt;/pre&gt;&lt;/td&gt;&lt;td class=&quot;code&quot;&gt;&lt;pre&gt;&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;aeProcessEvents&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;aeEventLoop&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;eventLoop&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;flags&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+    &lt;span class=&quot;p&quot;&gt;...&lt;/span&gt;
+    &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;eventLoop&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;maxfd&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;!=&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;-&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;||&lt;/span&gt;
+        &lt;span class=&quot;p&quot;&gt;((&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;flags&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;AE_TIME_EVENTS&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;!&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;flags&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;AE_DONT_WAIT&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)))&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+        &lt;span class=&quot;p&quot;&gt;...&lt;/span&gt;
+
+        &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;flags&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;AE_TIME_EVENTS&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;!&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;flags&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;AE_DONT_WAIT&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;))&lt;/span&gt;
+            &lt;span class=&quot;n&quot;&gt;shortest&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;aeSearchNearestTimer&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;eventLoop&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+        &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;shortest&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+            &lt;span class=&quot;kt&quot;&gt;long&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;now_sec&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;now_ms&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+
+            &lt;span class=&quot;n&quot;&gt;aeGetTime&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;now_sec&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;now_ms&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+            &lt;span class=&quot;n&quot;&gt;tvp&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;tv&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+
+            &lt;span class=&quot;cm&quot;&gt;/* How many milliseconds we need to wait for the next
+             * time event to fire? */&lt;/span&gt;
+            &lt;span class=&quot;kt&quot;&gt;long&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;long&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ms&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;
+                &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;shortest&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;when_sec&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;-&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;now_sec&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1000&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt;
+                &lt;span class=&quot;n&quot;&gt;shortest&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;when_ms&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;-&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;now_ms&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+
+            &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;ms&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+                &lt;span class=&quot;n&quot;&gt;tvp&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;tv_sec&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ms&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;/&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1000&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+                &lt;span class=&quot;n&quot;&gt;tvp&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;tv_usec&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;ms&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;%&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;1000&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1000&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+            &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;else&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+                &lt;span class=&quot;n&quot;&gt;tvp&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;tv_sec&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+                &lt;span class=&quot;n&quot;&gt;tvp&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;tv_usec&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+            &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+        &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;else&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+          &lt;span class=&quot;p&quot;&gt;...&lt;/span&gt;
+        &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+        &lt;span class=&quot;p&quot;&gt;...&lt;/span&gt;
+    &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+    &lt;span class=&quot;cm&quot;&gt;/* Check time events */&lt;/span&gt;
+    &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;flags&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;AE_TIME_EVENTS&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+        &lt;span class=&quot;n&quot;&gt;processed&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;processTimeEvents&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;eventLoop&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+
+    &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;processed&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;cm&quot;&gt;/* return the number of processed file/time events */&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+&lt;/pre&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/tbody&gt;&lt;/table&gt;&lt;/code&gt;&lt;/pre&gt;
+&lt;/figure&gt;
+
+&lt;p&gt;In &lt;code class=&quot;highlighter-rouge&quot;&gt;processTimeEvents&lt;/code&gt; function, it calls &lt;code class=&quot;highlighter-rouge&quot;&gt;te-&amp;gt;timeProc&lt;/code&gt; which is a function
+pointer registered before (in above situation, it’s &lt;code class=&quot;highlighter-rouge&quot;&gt;serverCron&lt;/code&gt;).&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;
+  &lt;div class=&quot;snippet-header&quot;&gt;
+    &lt;div class=&quot;snippet-name&quot;&gt;&lt;span&gt;src/ae.c&lt;/span&gt;&lt;/div&gt;
+    &lt;div class=&quot;snippet-actions&quot;&gt;
+      &lt;button class=&quot;snippet-action-copy&quot; data-snippet=&quot;c3RhdGljIGludCBwcm9jZXNzVGltZUV2ZW50cyhhZUV2ZW50TG9vcCAqZXZl
+bnRMb29wKSB7CiAgICAuLi4KICAgIHRlID0gZXZlbnRMb29wLT50aW1lRXZl
+bnRIZWFkOwogICAgbWF4SWQgPSBldmVudExvb3AtPnRpbWVFdmVudE5leHRJ
+ZC0xOwogICAgd2hpbGUodGUpIHsKICAgICAgICAuLi4KICAgICAgICBhZUdl
+dFRpbWUoJm5vd19zZWMsICZub3dfbXMpOwogICAgICAgIGlmIChub3dfc2Vj
+ID4gdGUtPndoZW5fc2VjIHx8CiAgICAgICAgICAgIChub3dfc2VjID09IHRl
+LT53aGVuX3NlYyAmJiBub3dfbXMgPj0gdGUtPndoZW5fbXMpKQogICAgICAg
+IHsKICAgICAgICAgICAgaW50IHJldHZhbDsKCiAgICAgICAgICAgIGlkID0g
+dGUtPmlkOwogICAgICAgICAgICB0ZS0+cmVmY291bnQrKzsKICAgICAgICAg
+ICAgcmV0dmFsID0gdGUtPnRpbWVQcm9jKGV2ZW50TG9vcCwgaWQsIHRlLT5j
+bGllbnREYXRhKTsKICAgICAgICAgICAgdGUtPnJlZmNvdW50LS07CiAgICAg
+ICAgICAgIHByb2Nlc3NlZCsrOwogICAgICAgICAgICBpZiAocmV0dmFsICE9
+IEFFX05PTU9SRSkgewogICAgICAgICAgICAgICAgYWVBZGRNaWxsaXNlY29u
+ZHNUb05vdyhyZXR2YWwsJnRlLT53aGVuX3NlYywmdGUtPndoZW5fbXMpOwog
+ICAgICAgICAgICB9IGVsc2UgewogICAgICAgICAgICAgICAgdGUtPmlkID0g
+QUVfREVMRVRFRF9FVkVOVF9JRDsKICAgICAgICAgICAgfQogICAgICAgIH0K
+ICAgICAgICB0ZSA9IHRlLT5uZXh0OwogICAgfQogICAgcmV0dXJuIHByb2Nl
+c3NlZDsKfQ==
+&quot;&gt;&lt;/button&gt;
+    &lt;/div&gt;
+  &lt;/div&gt;
+  &lt;pre&gt;&lt;code class=&quot;language-c&quot; data-lang=&quot;c&quot;&gt;&lt;table class=&quot;rouge-table&quot;&gt;&lt;tbody&gt;&lt;tr&gt;&lt;td class=&quot;gutter gl&quot;&gt;&lt;pre class=&quot;lineno&quot;&gt;288
+289
+290
+291
+292
+293
+294
+295
+296
+297
+298
+299
+300
+301
+302
+303
+304
+305
+306
+307
+308
+309
+310
+311
+312
+313
+314
+&lt;/pre&gt;&lt;/td&gt;&lt;td class=&quot;code&quot;&gt;&lt;pre&gt;&lt;span class=&quot;k&quot;&gt;static&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;processTimeEvents&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;aeEventLoop&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;eventLoop&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+    &lt;span class=&quot;p&quot;&gt;...&lt;/span&gt;
+    &lt;span class=&quot;n&quot;&gt;te&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;eventLoop&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;timeEventHead&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+    &lt;span class=&quot;n&quot;&gt;maxId&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;eventLoop&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;timeEventNextId&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+    &lt;span class=&quot;k&quot;&gt;while&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;te&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+        &lt;span class=&quot;p&quot;&gt;...&lt;/span&gt;
+        &lt;span class=&quot;n&quot;&gt;aeGetTime&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;now_sec&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;now_ms&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+        &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;now_sec&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;te&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;when_sec&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;||&lt;/span&gt;
+            &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;now_sec&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;==&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;te&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;when_sec&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;now_ms&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;te&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;when_ms&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;))&lt;/span&gt;
+        &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+            &lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;retval&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+
+            &lt;span class=&quot;n&quot;&gt;id&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;te&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;id&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+            &lt;span class=&quot;n&quot;&gt;te&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;refcount&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;++&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+            &lt;span class=&quot;n&quot;&gt;retval&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;te&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;timeProc&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;eventLoop&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;id&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;te&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;clientData&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+            &lt;span class=&quot;n&quot;&gt;te&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;refcount&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;--&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+            &lt;span class=&quot;n&quot;&gt;processed&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;++&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+            &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;retval&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;!=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;AE_NOMORE&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+                &lt;span class=&quot;n&quot;&gt;aeAddMillisecondsToNow&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;retval&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;te&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;when_sec&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;te&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;when_ms&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+            &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;else&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+                &lt;span class=&quot;n&quot;&gt;te&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;id&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;AE_DELETED_EVENT_ID&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+            &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+        &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+        &lt;span class=&quot;n&quot;&gt;te&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;te&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;next&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+    &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+    &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;processed&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+&lt;/pre&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/tbody&gt;&lt;/table&gt;&lt;/code&gt;&lt;/pre&gt;
+&lt;/figure&gt;
+
+&lt;p&gt;We now come to &lt;code class=&quot;highlighter-rouge&quot;&gt;serverCron&lt;/code&gt;. &lt;code class=&quot;highlighter-rouge&quot;&gt;serverCron&lt;/code&gt; is a versatile function that is used
+to do a number of things that need to be done asynchronously, including:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;Remove expired keys&lt;/li&gt;
+  &lt;li&gt;Dump in-memory data into a disk file&lt;/li&gt;
+  &lt;li&gt;Replication reconnection&lt;/li&gt;
+  &lt;li&gt;…&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;In this post, we only focus on data dump. In &lt;code class=&quot;highlighter-rouge&quot;&gt;redis.conf&lt;/code&gt;, we can use &lt;code class=&quot;highlighter-rouge&quot;&gt;save&lt;/code&gt;
+directive multiple times to specify when to save the db on disk. For example:&lt;/p&gt;
+
+&lt;div class=&quot;highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;save 900 1
+save 300 10
+save 60 10000
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;In the above example, saveing on disk will happen either:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;After 900 seconds (15 min) if at least 1 key changed&lt;/li&gt;
+  &lt;li&gt;After 300 seconds (5 min) if at least 10 keys changed&lt;/li&gt;
+  &lt;li&gt;After 60 seconds if at least 10000 keys changed&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;On server initialization, the &lt;code class=&quot;highlighter-rouge&quot;&gt;save&lt;/code&gt; directives are parsed into a list of
+&lt;code class=&quot;highlighter-rouge&quot;&gt;saveparam&lt;/code&gt; stored in the global &lt;code class=&quot;highlighter-rouge&quot;&gt;redisServer&lt;/code&gt; structure. So here in
+&lt;code class=&quot;highlighter-rouge&quot;&gt;serverCron&lt;/code&gt; function, it iterates over the &lt;code class=&quot;highlighter-rouge&quot;&gt;saveparams&lt;/code&gt; list to check if it
+needs to call &lt;code class=&quot;highlighter-rouge&quot;&gt;rdbSaveBackground&lt;/code&gt;.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;
+  &lt;div class=&quot;snippet-header&quot;&gt;
+    &lt;div class=&quot;snippet-name&quot;&gt;&lt;span&gt;src/server.c&lt;/span&gt;&lt;/div&gt;
+    &lt;div class=&quot;snippet-actions&quot;&gt;
+      &lt;button class=&quot;snippet-action-copy&quot; data-snippet=&quot;aW50IHNlcnZlckNyb24oc3RydWN0IGFlRXZlbnRMb29wICpldmVudExvb3As
+IGxvbmcgbG9uZyBpZCwgdm9pZCAqY2xpZW50RGF0YSkgewogICAgLi4uCgog
+ICAgICAgIC8qIElmIHRoZXJlIGlzIG5vdCBhIGJhY2tncm91bmQgc2F2aW5n
+L3Jld3JpdGUgaW4gcHJvZ3Jlc3MgY2hlY2sgaWYKICAgICAgICAgKiB3ZSBo
+YXZlIHRvIHNhdmUvcmV3cml0ZSBub3cuICovCiAgICAgICAgZm9yIChqID0g
+MDsgaiA8IHNlcnZlci5zYXZlcGFyYW1zbGVuOyBqKyspIHsKICAgICAgICAg
+ICAgc3RydWN0IHNhdmVwYXJhbSAqc3AgPSBzZXJ2ZXIuc2F2ZXBhcmFtcytq
+OwoKICAgICAgICAgICAgLyogU2F2ZSBpZiB3ZSByZWFjaGVkIHRoZSBnaXZl
+biBhbW91bnQgb2YgY2hhbmdlcywKICAgICAgICAgICAgICogdGhlIGdpdmVu
+IGFtb3VudCBvZiBzZWNvbmRzLCBhbmQgaWYgdGhlIGxhdGVzdCBiZ3NhdmUg
+d2FzCiAgICAgICAgICAgICAqIHN1Y2Nlc3NmdWwgb3IgaWYsIGluIGNhc2Ug
+b2YgYW4gZXJyb3IsIGF0IGxlYXN0CiAgICAgICAgICAgICAqIENPTkZJR19C
+R1NBVkVfUkVUUllfREVMQVkgc2Vjb25kcyBhbHJlYWR5IGVsYXBzZWQuICov
+CiAgICAgICAgICAgIGlmIChzZXJ2ZXIuZGlydHkgPj0gc3AtPmNoYW5nZXMg
+JiYKICAgICAgICAgICAgICAgIHNlcnZlci51bml4dGltZS1zZXJ2ZXIubGFz
+dHNhdmUgPiBzcC0+c2Vjb25kcyAmJgogICAgICAgICAgICAgICAgKHNlcnZl
+ci51bml4dGltZS1zZXJ2ZXIubGFzdGJnc2F2ZV90cnkgPgogICAgICAgICAg
+ICAgICAgIENPTkZJR19CR1NBVkVfUkVUUllfREVMQVkgfHwKICAgICAgICAg
+ICAgICAgICBzZXJ2ZXIubGFzdGJnc2F2ZV9zdGF0dXMgPT0gQ19PSykpCiAg
+ICAgICAgICAgIHsKICAgICAgICAgICAgICAgIHNlcnZlckxvZyhMTF9OT1RJ
+Q0UsIiVkIGNoYW5nZXMgaW4gJWQgc2Vjb25kcy4gU2F2aW5nLi4uIiwKICAg
+ICAgICAgICAgICAgICAgICBzcC0+Y2hhbmdlcywgKGludClzcC0+c2Vjb25k
+cyk7CiAgICAgICAgICAgICAgICByZGJTYXZlSW5mbyByc2ksICpyc2lwdHI7
+CiAgICAgICAgICAgICAgICByc2lwdHIgPSByZGJQb3B1bGF0ZVNhdmVJbmZv
+KCZyc2kpOwogICAgICAgICAgICAgICAgcmRiU2F2ZUJhY2tncm91bmQoc2Vy
+dmVyLnJkYl9maWxlbmFtZSxyc2lwdHIpOwogICAgICAgICAgICAgICAgYnJl
+YWs7CiAgICAgICAgICAgIH0KICAgICAgICB9CgogIC4uLgp9
+&quot;&gt;&lt;/button&gt;
+    &lt;/div&gt;
+  &lt;/div&gt;
+  &lt;pre&gt;&lt;code class=&quot;language-c&quot; data-lang=&quot;c&quot;&gt;&lt;table class=&quot;rouge-table&quot;&gt;&lt;tbody&gt;&lt;tr&gt;&lt;td class=&quot;gutter gl&quot;&gt;&lt;pre class=&quot;lineno&quot;&gt;1845
+1846
+1847
+1848
+1849
+1850
+1851
+1852
+1853
+1854
+1855
+1856
+1857
+1858
+1859
+1860
+1861
+1862
+1863
+1864
+1865
+1866
+1867
+1868
+1869
+1870
+1871
+1872
+1873
+&lt;/pre&gt;&lt;/td&gt;&lt;td class=&quot;code&quot;&gt;&lt;pre&gt;&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;serverCron&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;struct&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;aeEventLoop&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;eventLoop&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;long&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;long&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;id&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;clientData&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+    &lt;span class=&quot;p&quot;&gt;...&lt;/span&gt;
+
+        &lt;span class=&quot;cm&quot;&gt;/* If there is not a background saving/rewrite in progress check if
+         * we have to save/rewrite now. */&lt;/span&gt;
+        &lt;span class=&quot;k&quot;&gt;for&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;j&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;j&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;server&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;saveparamslen&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;j&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;++&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+            &lt;span class=&quot;k&quot;&gt;struct&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;saveparam&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;sp&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;server&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;saveparams&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;+&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;j&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+
+            &lt;span class=&quot;cm&quot;&gt;/* Save if we reached the given amount of changes,
+             * the given amount of seconds, and if the latest bgsave was
+             * successful or if, in case of an error, at least
+             * CONFIG_BGSAVE_RETRY_DELAY seconds already elapsed. */&lt;/span&gt;
+            &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;server&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;dirty&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;sp&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;changes&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&amp;amp;&lt;/span&gt;
+                &lt;span class=&quot;n&quot;&gt;server&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;unixtime&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;server&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;lastsave&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;sp&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;seconds&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&amp;amp;&lt;/span&gt;
+                &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;server&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;unixtime&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;server&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;lastbgsave_try&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt;
+                 &lt;span class=&quot;n&quot;&gt;CONFIG_BGSAVE_RETRY_DELAY&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;||&lt;/span&gt;
+                 &lt;span class=&quot;n&quot;&gt;server&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;lastbgsave_status&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;==&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;C_OK&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;))&lt;/span&gt;
+            &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+                &lt;span class=&quot;n&quot;&gt;serverLog&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;LL_NOTICE&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;%d changes in %d seconds. Saving...&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;
+                    &lt;span class=&quot;n&quot;&gt;sp&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;changes&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;sp&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;seconds&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+                &lt;span class=&quot;n&quot;&gt;rdbSaveInfo&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;rsi&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;rsiptr&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+                &lt;span class=&quot;n&quot;&gt;rsiptr&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;rdbPopulateSaveInfo&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;rsi&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+                &lt;span class=&quot;n&quot;&gt;rdbSaveBackground&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;server&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;rdb_filename&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;rsiptr&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+                &lt;span class=&quot;k&quot;&gt;break&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+            &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+        &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+
+  &lt;span class=&quot;p&quot;&gt;...&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+&lt;/pre&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/tbody&gt;&lt;/table&gt;&lt;/code&gt;&lt;/pre&gt;
+&lt;/figure&gt;
+
+&lt;p&gt;In &lt;code class=&quot;highlighter-rouge&quot;&gt;rdbSaveBackground&lt;/code&gt; function, it calls &lt;code class=&quot;highlighter-rouge&quot;&gt;redisFork&lt;/code&gt; to create a child process,
+and the child will do the real saving job. You may worry that because a new
+process is created, the totally used memory will become 2x. Don’t worry, because
+of COW (copy-on-write), unless writing to memory operation happens, the memory
+won’t become 2x.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;
+  &lt;div class=&quot;snippet-header&quot;&gt;
+    &lt;div class=&quot;snippet-name&quot;&gt;&lt;span&gt;src/rdb.c&lt;/span&gt;&lt;/div&gt;
+    &lt;div class=&quot;snippet-actions&quot;&gt;
+      &lt;button class=&quot;snippet-action-copy&quot; data-snippet=&quot;aW50IHJkYlNhdmVCYWNrZ3JvdW5kKGNoYXIgKmZpbGVuYW1lLCByZGJTYXZl
+SW5mbyAqcnNpKSB7CiAgICAuLi4KCiAgICBpZiAoKGNoaWxkcGlkID0gcmVk
+aXNGb3JrKCkpID09IDApIHsKICAgICAgICBpbnQgcmV0dmFsOwoKICAgICAg
+ICAvKiBDaGlsZCAqLwogICAgICAgIHJlZGlzU2V0UHJvY1RpdGxlKCJyZWRp
+cy1yZGItYmdzYXZlIik7CiAgICAgICAgcmVkaXNTZXRDcHVBZmZpbml0eShz
+ZXJ2ZXIuYmdzYXZlX2NwdWxpc3QpOwogICAgICAgIHJldHZhbCA9IHJkYlNh
+dmUoZmlsZW5hbWUscnNpKTsKICAgICAgICBpZiAocmV0dmFsID09IENfT0sp
+IHsKICAgICAgICAgICAgc2VuZENoaWxkQ09XSW5mbyhDSElMRF9JTkZPX1RZ
+UEVfUkRCLCAiUkRCIik7CiAgICAgICAgfQogICAgICAgIGV4aXRGcm9tQ2hp
+bGQoKHJldHZhbCA9PSBDX09LKSA/IDAgOiAxKTsKICAgIH0gZWxzZSB7CiAg
+ICAgICAgLi4uCiAgICB9CiAgICByZXR1cm4gQ19PSzsgLyogdW5yZWFjaGVk
+ICovCn0=
+&quot;&gt;&lt;/button&gt;
+    &lt;/div&gt;
+  &lt;/div&gt;
+  &lt;pre&gt;&lt;code class=&quot;language-c&quot; data-lang=&quot;c&quot;&gt;&lt;table class=&quot;rouge-table&quot;&gt;&lt;tbody&gt;&lt;tr&gt;&lt;td class=&quot;gutter gl&quot;&gt;&lt;pre class=&quot;lineno&quot;&gt;1340
+1341
+1342
+1343
+1344
+1345
+1346
+1347
+1348
+1349
+1350
+1351
+1352
+1353
+1354
+1355
+1356
+1357
+1358
+&lt;/pre&gt;&lt;/td&gt;&lt;td class=&quot;code&quot;&gt;&lt;pre&gt;&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;rdbSaveBackground&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;char&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;filename&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;rdbSaveInfo&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;rsi&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+    &lt;span class=&quot;p&quot;&gt;...&lt;/span&gt;
+
+    &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;((&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;childpid&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;redisFork&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;())&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;==&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+        &lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;retval&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+
+        &lt;span class=&quot;cm&quot;&gt;/* Child */&lt;/span&gt;
+        &lt;span class=&quot;n&quot;&gt;redisSetProcTitle&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;redis-rdb-bgsave&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+        &lt;span class=&quot;n&quot;&gt;redisSetCpuAffinity&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;server&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;bgsave_cpulist&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+        &lt;span class=&quot;n&quot;&gt;retval&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;rdbSave&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;filename&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;rsi&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+        &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;retval&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;==&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;C_OK&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+            &lt;span class=&quot;n&quot;&gt;sendChildCOWInfo&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;CHILD_INFO_TYPE_RDB&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;&quot;RDB&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+        &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+        &lt;span class=&quot;n&quot;&gt;exitFromChild&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;((&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;retval&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;==&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;C_OK&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;?&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+    &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;else&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+        &lt;span class=&quot;p&quot;&gt;...&lt;/span&gt;
+    &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+    &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;C_OK&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;cm&quot;&gt;/* unreached */&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+&lt;/pre&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/tbody&gt;&lt;/table&gt;&lt;/code&gt;&lt;/pre&gt;
+&lt;/figure&gt;
+
+&lt;p&gt;So let’s look at the function &lt;code class=&quot;highlighter-rouge&quot;&gt;rdbSave&lt;/code&gt; which dose the real data dump.&lt;/p&gt;
+
+&lt;p&gt;In &lt;code class=&quot;highlighter-rouge&quot;&gt;rdbSave&lt;/code&gt;, it first creates a temporary file, and then writes header information in the
+file, iterates over each database and writes database information and key-value
+pairs into the file, finally appends &lt;code class=&quot;highlighter-rouge&quot;&gt;EOF&lt;/code&gt; marker and an 8-bytes checksum. At
+the end, it closes the temporary file, and renames it to the final filename.&lt;/p&gt;
+
+&lt;div class=&quot;highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;-&amp;gt; rdbSave // src/rdb.c:1273L
+   -&amp;gt; fp = fopen(tmpfile,&quot;w&quot;);
+   -&amp;gt; rdbSaveRio(&amp;amp;rdb,&amp;amp;error,RDBFLAGS_NONE,rsi)
+      -&amp;gt; snprintf(magic,sizeof(magic),&quot;REDIS%04d&quot;,RDB_VERSION)
+      -&amp;gt; rdbWriteRaw(rdb,magic,9)
+      -&amp;gt; rdbSaveInfoAuxFields(rdb,rdbflags,rsi)
+      -&amp;gt; for (j = 0; j &amp;lt; server.dbnum; j++)
+         -&amp;gt; rdbSaveType(rdb,RDB_OPCODE_SELECTDB)
+         -&amp;gt; rdbSaveLen(rdb,j)
+         -&amp;gt; rdbSaveType(rdb,RDB_OPCODE_RESIZEDB)
+         -&amp;gt; rdbSaveLen(rdb,db_size)
+         -&amp;gt; rdbSaveLen(rdb,expires_size)
+         -&amp;gt; while((de = dictNext(di)) != NULL)
+            -&amp;gt; rdbSaveKeyValuePair(rdb,&amp;amp;key,o,expire)
+      -&amp;gt; rdbSaveType(rdb,RDB_OPCODE_EOF)
+      -&amp;gt; rioWrite(rdb,&amp;amp;cksum,8)
+   -&amp;gt; fclose(fp)
+   -&amp;gt; rename(tmpfile,filename)
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;</content><author><name></name></author><summary type="html">This post aims to covering how Redis dumps in-memory data into a disk file. The version of Redis used is 6.0.5.</summary></entry><entry><title type="html">Prometheus TSDB internals</title><link href="https://uzxmx.github.io/prometheus-tsdb-internals.html" rel="alternate" type="text/html" title="Prometheus TSDB internals" /><published>2020-05-24T20:15:00+08:00</published><updated>2020-05-24T20:15:00+08:00</updated><id>https://uzxmx.github.io/prometheus-tsdb-internals</id><content type="html" xml:base="https://uzxmx.github.io/prometheus-tsdb-internals.html">&lt;p&gt;Prometheus has local and remote storage. At the beginning, it creates a local
 storage, a remote storage, and a fanout storage. A fanout storage is like a
 wrapper storage that wraps a primary storage and multiple secondary storages,
 which proxies reads and writes through to the underlying.&lt;/p&gt;
