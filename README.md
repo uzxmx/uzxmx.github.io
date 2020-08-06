@@ -7,6 +7,9 @@ This is a [Jekyll](https://jekyllrb.com/) project. The website can be viewed at
 
 ```
 bundle exec jekyll serve --config _config.yml,_config.dev.yml
+
+# Show drafts
+bundle exec jekyll serve --config _config.yml,_config.dev.yml --drafts
 ```
 
 ## Add jekyll plugin
