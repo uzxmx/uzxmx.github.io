@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+
+set -eo pipefail
+
+if [ "$TRAVIS_CI" = "1" -a -n "$TRAVIS_GITHUB_TOKEN" ]; then
+  commit_msg_prefix="Travis CI: "
+  git config --global user.email "travis@travis-ci.org"
+  git config --global user.name "Travis CI"
+  git remote set-url origin "https://${TRAVIS_GITHUB_TOKEN}@github.com/uzxmx/uzxmx.github.io.git"
+fi
+
+ref=$(git rev-parse --short HEAD)
+
+git checkout master
+
+for file in _site/*; do
+  if [ -d "$file" ]; then
+    rm -rf $(basename "$file")
+  fi
+  mv "$file" .
+done
+
+git add -A
+
+git commit -m "${commit_msg_prefix}Generate site from commit $ref"
+
+git push origin master

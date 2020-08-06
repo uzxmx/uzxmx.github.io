@@ -1,0 +1,7 @@
+language: ruby
+
+if: branch = develop
+
+script:
+  - make clean
+  - make release
