@@ -1,5 +1,7 @@
 # uzxmx.github.io
 
+[![Build Status](https://travis-ci.org/uzxmx/uzxmx.github.io.svg?branch=develop)](https://travis-ci.org/uzxmx/uzxmx.github.io)
+
 This is a [Jekyll](https://jekyllrb.com/) project. The website can be viewed at
 [here](https://uzxmx.github.io/).
 

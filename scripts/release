@@ -20,13 +20,13 @@ git checkout -B master origin/master
 git merge origin/master
 
 for file in _site/*; do
+  name=$(basename "$file")
   if [ -d "$file" ]; then
-    rm -rf $(basename "$file")
+    rm -rf "$name"
   fi
   mv "$file" .
+  git add "$name"
 done
-
-git add -A
 
 git commit -m "${commit_msg_prefix}Generate site from commit $ref"
 
