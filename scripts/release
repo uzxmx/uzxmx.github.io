@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+
+set -eo pipefail
+
+if [ "$TRAVIS_CI" = "1" -a -n "$TRAVIS_GITHUB_TOKEN" ]; then
+  commit_msg_prefix="Travis CI: "
+  git config --global user.email "travis@travis-ci.org"
+  git config --global user.name "Travis CI"
+  git remote set-url origin "https://${TRAVIS_GITHUB_TOKEN}@github.com/uzxmx/uzxmx.github.io.git"
+
+  # Travis uses shallow clone of a single branch, so we need to set the local
+  # repository to track all branches of remote.
+  git remote set-branches origin '*'
+fi
+
+ref=$(git rev-parse --short HEAD)
+
+git fetch origin master
+git checkout -B master origin/master
+git merge origin/master
+
+for file in _site/*; do
+  name=$(basename "$file")
+  if [ -d "$file" ]; then
+    rm -rf "$name"
+  fi
+  mv "$file" .
+  git add "$name"
+done
+
+git commit -m "${commit_msg_prefix}Generate site from commit $ref"
+
+git push origin master
