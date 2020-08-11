@@ -40,4 +40,10 @@ var store = [{
         "tags": [],
         "url": "https://uzxmx.github.io/redis-rdb-internals.html",
         "teaser": null
+      },{
+        "title": "ZooKeeper client library internals",
+        "excerpt":"This post aims to covering how ZooKeeper client library works internally. The version of ZooKeeper used is 3.6.1. The topmost class ZooKeeper is the public interface that a client can use to interact with a ZooKeeper server (sending requests and getting responses). The most notable features are as follows: Session...","categories": ["zookeeper"],
+        "tags": [],
+        "url": "https://uzxmx.github.io/zookeeper-client-library-internals.html",
+        "teaser": null
       }]

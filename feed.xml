@@ -1,4 +1,295 @@
-<?xml version="1.0" encoding="utf-8"?><feed xmlns="http://www.w3.org/2005/Atom" ><generator uri="https://jekyllrb.com/" version="3.8.5">Jekyll</generator><link href="https://uzxmx.github.io/feed.xml" rel="self" type="application/atom+xml" /><link href="https://uzxmx.github.io/" rel="alternate" type="text/html" /><updated>2020-08-06T05:46:51+00:00</updated><id>https://uzxmx.github.io/feed.xml</id><title type="html">Mingxiang’s blog</title><subtitle>A blog that contains articles about programming languages, open source frameworks, and some technical how-to and tricks.</subtitle><entry><title type="html">Redis RDB internals</title><link href="https://uzxmx.github.io/redis-rdb-internals.html" rel="alternate" type="text/html" title="Redis RDB internals" /><published>2020-06-13T02:11:00+00:00</published><updated>2020-06-13T02:11:00+00:00</updated><id>https://uzxmx.github.io/redis-rdb-internals</id><content type="html" xml:base="https://uzxmx.github.io/redis-rdb-internals.html">&lt;p&gt;This post aims to covering how Redis dumps in-memory data into a disk file.  The
+<?xml version="1.0" encoding="utf-8"?><feed xmlns="http://www.w3.org/2005/Atom" ><generator uri="https://jekyllrb.com/" version="3.8.5">Jekyll</generator><link href="https://uzxmx.github.io/feed.xml" rel="self" type="application/atom+xml" /><link href="https://uzxmx.github.io/" rel="alternate" type="text/html" /><updated>2020-08-11T03:21:57+00:00</updated><id>https://uzxmx.github.io/feed.xml</id><title type="html">Mingxiang’s blog</title><subtitle>A blog that contains articles about programming languages, open source frameworks, and some technical how-to and tricks.</subtitle><entry><title type="html">ZooKeeper client library internals</title><link href="https://uzxmx.github.io/zookeeper-client-library-internals.html" rel="alternate" type="text/html" title="ZooKeeper client library internals" /><published>2020-06-14T12:05:00+00:00</published><updated>2020-06-14T12:05:00+00:00</updated><id>https://uzxmx.github.io/zookeeper-client-library-internals</id><content type="html" xml:base="https://uzxmx.github.io/zookeeper-client-library-internals.html">&lt;p&gt;This post aims to covering how ZooKeeper client library works internally. The
+version of ZooKeeper used is 3.6.1.&lt;/p&gt;
+
+&lt;h2 id=&quot;the-topmost-class&quot;&gt;The topmost class&lt;/h2&gt;
+
+&lt;p&gt;&lt;a href=&quot;https://zookeeper.apache.org/doc/r3.6.1/apidocs/zookeeper-server/org/apache/zookeeper/ZooKeeper.html&quot;&gt;ZooKeeper&lt;/a&gt; is the public interface that a client can use to interact
+with a ZooKeeper server (sending requests and getting responses). The most
+notable features are as follows:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;Session establishment is asynchronous&lt;/li&gt;
+  &lt;li&gt;&lt;a href=&quot;https://github.com/apache/zookeeper/blob/104dcb3e3fb464b30c5186d229e00af9f332524b/zookeeper-server/src/main/java/org/apache/zookeeper/ZooKeeper.java#L914&quot;&gt;Read-only
+mode&lt;/a&gt; (useful in case of partitioning)&lt;/li&gt;
+  &lt;li&gt;Sync/Async requests&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;h3 id=&quot;session-establishment&quot;&gt;Session establishment&lt;/h3&gt;
+
+&lt;p&gt;When instantiating a &lt;a href=&quot;https://zookeeper.apache.org/doc/r3.6.1/apidocs/zookeeper-server/org/apache/zookeeper/ZooKeeper.html&quot;&gt;ZooKeeper&lt;/a&gt;, it creates a
+&lt;a href=&quot;https://zookeeper.apache.org/doc/r3.6.1/apidocs/zookeeper-server/org/apache/zookeeper/ClientCnxn.html&quot;&gt;ClientCnxn&lt;/a&gt; object, starts a sender thread and an event thread
+(these two threads will be described in the following section) and then returns
+immediately. So the session may or may not have been established at that moment.&lt;/p&gt;
+
+&lt;h3 id=&quot;syncasync-requests&quot;&gt;Sync/Async requests&lt;/h3&gt;
+
+&lt;p&gt;&lt;a href=&quot;https://zookeeper.apache.org/doc/r3.6.1/apidocs/zookeeper-server/org/apache/zookeeper/ZooKeeper.html&quot;&gt;ZooKeeper&lt;/a&gt; provides both synchronous and asynchronous methods to
+send requests. The synchronous methods are implemented on top of the
+asynchronous mechanism. They are backed by below &lt;code class=&quot;highlighter-rouge&quot;&gt;submitRequest&lt;/code&gt; method. In this
+method, after adding a new packet to the queue, the calling thread waits on the
+packet for its finishing.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;
+  &lt;div class=&quot;snippet-header&quot;&gt;
+    &lt;div class=&quot;snippet-name&quot;&gt;&lt;span&gt;zookeeper-server/.../org/apache/zookeeper/ClientCnxn.java&lt;/span&gt;&lt;/div&gt;
+    &lt;div class=&quot;snippet-actions&quot;&gt;
+      &lt;button class=&quot;snippet-action-copy&quot; data-snippet=&quot;cHVibGljIFJlcGx5SGVhZGVyIHN1Ym1pdFJlcXVlc3QoCiAgICBSZXF1ZXN0
+SGVhZGVyIGgsCiAgICBSZWNvcmQgcmVxdWVzdCwKICAgIFJlY29yZCByZXNw
+b25zZSwKICAgIFdhdGNoUmVnaXN0cmF0aW9uIHdhdGNoUmVnaXN0cmF0aW9u
+LAogICAgV2F0Y2hEZXJlZ2lzdHJhdGlvbiB3YXRjaERlcmVnaXN0cmF0aW9u
+KSB0aHJvd3MgSW50ZXJydXB0ZWRFeGNlcHRpb24gewogICAgUmVwbHlIZWFk
+ZXIgciA9IG5ldyBSZXBseUhlYWRlcigpOwogICAgUGFja2V0IHBhY2tldCA9
+IHF1ZXVlUGFja2V0KAogICAgICAgIGgsCiAgICAgICAgciwKICAgICAgICBy
+ZXF1ZXN0LAogICAgICAgIHJlc3BvbnNlLAogICAgICAgIG51bGwsCiAgICAg
+ICAgbnVsbCwKICAgICAgICBudWxsLAogICAgICAgIG51bGwsCiAgICAgICAg
+d2F0Y2hSZWdpc3RyYXRpb24sCiAgICAgICAgd2F0Y2hEZXJlZ2lzdHJhdGlv
+bik7CiAgICBzeW5jaHJvbml6ZWQgKHBhY2tldCkgewogICAgICAgIGlmIChy
+ZXF1ZXN0VGltZW91dCA+IDApIHsKICAgICAgICAgICAgLy8gV2FpdCBmb3Ig
+cmVxdWVzdCBjb21wbGV0aW9uIHdpdGggdGltZW91dAogICAgICAgICAgICB3
+YWl0Rm9yUGFja2V0RmluaXNoKHIsIHBhY2tldCk7CiAgICAgICAgfSBlbHNl
+IHsKICAgICAgICAgICAgLy8gV2FpdCBmb3IgcmVxdWVzdCBjb21wbGV0aW9u
+IGluZmluaXRlbHkKICAgICAgICAgICAgd2hpbGUgKCFwYWNrZXQuZmluaXNo
+ZWQpIHsKICAgICAgICAgICAgICAgIHBhY2tldC53YWl0KCk7CiAgICAgICAg
+ICAgIH0KICAgICAgICB9CiAgICB9CiAgICBpZiAoci5nZXRFcnIoKSA9PSBD
+b2RlLlJFUVVFU1RUSU1FT1VULmludFZhbHVlKCkpIHsKICAgICAgICBzZW5k
+VGhyZWFkLmNsZWFuQW5kTm90aWZ5U3RhdGUoKTsKICAgIH0KICAgIHJldHVy
+biByOwp9
+&quot;&gt;&lt;/button&gt;
+    &lt;/div&gt;
+  &lt;/div&gt;
+  &lt;pre&gt;&lt;code class=&quot;language-java&quot; data-lang=&quot;java&quot;&gt;&lt;table class=&quot;rouge-table&quot;&gt;&lt;tbody&gt;&lt;tr&gt;&lt;td class=&quot;gutter gl&quot;&gt;&lt;pre class=&quot;lineno&quot;&gt;1536
+1537
+1538
+1539
+1540
+1541
+1542
+1543
+1544
+1545
+1546
+1547
+1548
+1549
+1550
+1551
+1552
+1553
+1554
+1555
+1556
+1557
+1558
+1559
+1560
+1561
+1562
+1563
+1564
+1565
+1566
+1567
+1568
+1569
+&lt;/pre&gt;&lt;/td&gt;&lt;td class=&quot;code&quot;&gt;&lt;pre&gt;&lt;span class=&quot;kd&quot;&gt;public&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;ReplyHeader&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;submitRequest&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;
+    &lt;span class=&quot;nc&quot;&gt;RequestHeader&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;h&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt;
+    &lt;span class=&quot;nc&quot;&gt;Record&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;request&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt;
+    &lt;span class=&quot;nc&quot;&gt;Record&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;response&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt;
+    &lt;span class=&quot;nc&quot;&gt;WatchRegistration&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;watchRegistration&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt;
+    &lt;span class=&quot;nc&quot;&gt;WatchDeregistration&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;watchDeregistration&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;kd&quot;&gt;throws&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;InterruptedException&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+    &lt;span class=&quot;nc&quot;&gt;ReplyHeader&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;r&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;new&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;ReplyHeader&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;();&lt;/span&gt;
+    &lt;span class=&quot;nc&quot;&gt;Packet&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;packet&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;queuePacket&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;
+        &lt;span class=&quot;n&quot;&gt;h&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt;
+        &lt;span class=&quot;n&quot;&gt;r&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt;
+        &lt;span class=&quot;n&quot;&gt;request&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt;
+        &lt;span class=&quot;n&quot;&gt;response&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt;
+        &lt;span class=&quot;kc&quot;&gt;null&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt;
+        &lt;span class=&quot;kc&quot;&gt;null&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt;
+        &lt;span class=&quot;kc&quot;&gt;null&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt;
+        &lt;span class=&quot;kc&quot;&gt;null&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt;
+        &lt;span class=&quot;n&quot;&gt;watchRegistration&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt;
+        &lt;span class=&quot;n&quot;&gt;watchDeregistration&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;);&lt;/span&gt;
+    &lt;span class=&quot;kd&quot;&gt;synchronized&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;packet&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+        &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;requestTimeout&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+            &lt;span class=&quot;c1&quot;&gt;// Wait for request completion with timeout&lt;/span&gt;
+            &lt;span class=&quot;n&quot;&gt;waitForPacketFinish&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;r&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;packet&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;);&lt;/span&gt;
+        &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;else&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+            &lt;span class=&quot;c1&quot;&gt;// Wait for request completion infinitely&lt;/span&gt;
+            &lt;span class=&quot;k&quot;&gt;while&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;(!&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;packet&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;finished&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+                &lt;span class=&quot;n&quot;&gt;packet&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;wait&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;();&lt;/span&gt;
+            &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+        &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+    &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;r&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;getErr&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;()&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;==&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;Code&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;REQUESTTIMEOUT&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;intValue&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;())&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+        &lt;span class=&quot;n&quot;&gt;sendThread&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;cleanAndNotifyState&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;();&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+    &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;r&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;;&lt;/span&gt;
+&lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+&lt;/pre&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/tbody&gt;&lt;/table&gt;&lt;/code&gt;&lt;/pre&gt;
+&lt;/figure&gt;
+
+&lt;p&gt;When using the asynchronous methods, a callback must be passed as an argument.
+All the supported types of callbacks are defined in
+&lt;a href=&quot;https://zookeeper.apache.org/doc/r3.6.1/apidocs/zookeeper-server/org/apache/zookeeper/AsyncCallback.html&quot;&gt;AsyncCallback&lt;/a&gt;.  Because the callback is executed in ZooKeeper
+IO thread, we shouldn’t perform expensive operations in the callback, otherwise,
+the ZooKeeper client won’t process other events in time.&lt;/p&gt;
+
+&lt;h2 id=&quot;the-core-of-io-handling&quot;&gt;The core of IO handling&lt;/h2&gt;
+
+&lt;p&gt;The class &lt;a href=&quot;https://zookeeper.apache.org/doc/r3.6.1/apidocs/zookeeper-server/org/apache/zookeeper/ClientCnxn.html&quot;&gt;ClientCnxn&lt;/a&gt; is the core of client IO handling. All
+operations on &lt;a href=&quot;https://zookeeper.apache.org/doc/r3.6.1/apidocs/zookeeper-server/org/apache/zookeeper/ZooKeeper.html&quot;&gt;ZooKeeper&lt;/a&gt; are finally performed by it.  Two threads
+are created and managed inside &lt;code class=&quot;highlighter-rouge&quot;&gt;ClientCnxn&lt;/code&gt;, one is &lt;code class=&quot;highlighter-rouge&quot;&gt;SenderThread&lt;/code&gt;, the other is
+&lt;code class=&quot;highlighter-rouge&quot;&gt;EventThread&lt;/code&gt;.&lt;/p&gt;
+
+&lt;h3 id=&quot;packets-queue&quot;&gt;Packets queue&lt;/h3&gt;
+
+&lt;p&gt;Internally there are two queues for packets. One is
+&lt;a href=&quot;https://github.com/apache/zookeeper/blob/release-3.6.1/zookeeper-server/src/main/java/org/apache/zookeeper/ClientCnxn.java#L152&quot;&gt;&lt;code class=&quot;highlighter-rouge&quot;&gt;outgoingQueue&lt;/code&gt;&lt;/a&gt;
+which stores packets ready to be sent. The other is
+&lt;a href=&quot;https://github.com/apache/zookeeper/blob/release-3.6.1/zookeeper-server/src/main/java/org/apache/zookeeper/ClientCnxn.java#L147&quot;&gt;&lt;code class=&quot;highlighter-rouge&quot;&gt;pendingQueue&lt;/code&gt;&lt;/a&gt;
+which stores packets that have have been sent and are waiting for a response.&lt;/p&gt;
+
+&lt;h3 id=&quot;senderthread&quot;&gt;SenderThread&lt;/h3&gt;
+
+&lt;p&gt;The &lt;a href=&quot;https://github.com/apache/zookeeper/blob/104dcb3e3fb464b30c5186d229e00af9f332524b/zookeeper-server/src/main/java/org/apache/zookeeper/ClientCnxn.java#L857&quot;&gt;&lt;code class=&quot;highlighter-rouge&quot;&gt;SenderThread&lt;/code&gt;&lt;/a&gt; repeatedly does the following:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;Connect to a ZooKeeper server unless connected&lt;/li&gt;
+  &lt;li&gt;Authenticate to the server if connected and required&lt;/li&gt;
+  &lt;li&gt;Send heart beats if connected&lt;/li&gt;
+  &lt;li&gt;Call the lower level socket implementation to proceed (poll and process IO
+events)&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;h4 id=&quot;lower-level-socket-implementations&quot;&gt;Lower level socket implementations&lt;/h4&gt;
+
+&lt;p&gt;The &lt;code class=&quot;highlighter-rouge&quot;&gt;SenderThread&lt;/code&gt; owns a &lt;code class=&quot;highlighter-rouge&quot;&gt;ClientCnxnSocket&lt;/code&gt; which abstracts out the lower level
+socket implementation. Two implementations are provided: &lt;code class=&quot;highlighter-rouge&quot;&gt;ClientCnxnSocketNIO&lt;/code&gt;
+and &lt;code class=&quot;highlighter-rouge&quot;&gt;ClientCnxnSocketNetty&lt;/code&gt;.&lt;/p&gt;
+
+&lt;p&gt;Let’s take &lt;code class=&quot;highlighter-rouge&quot;&gt;ClientCnxnSocketNIO&lt;/code&gt; for an example. The main logic is &lt;code class=&quot;highlighter-rouge&quot;&gt;doIO&lt;/code&gt;
+method. Inside &lt;code class=&quot;highlighter-rouge&quot;&gt;doIO&lt;/code&gt;, when &lt;code class=&quot;highlighter-rouge&quot;&gt;SocketChannel&lt;/code&gt; is readable, available data will be
+read into &lt;code class=&quot;highlighter-rouge&quot;&gt;incomingBuffer&lt;/code&gt; which is a preallocated &lt;code class=&quot;highlighter-rouge&quot;&gt;ByteBuffer&lt;/code&gt; (with fixed
+buffer size). When &lt;code class=&quot;highlighter-rouge&quot;&gt;incomingBuffer&lt;/code&gt; is full, if it is &lt;code class=&quot;highlighter-rouge&quot;&gt;lenBuffer&lt;/code&gt; (which is also
+a &lt;code class=&quot;highlighter-rouge&quot;&gt;ByteBuffer&lt;/code&gt; but only accepts 4-bytes data which is the length of the incoming
+message), it’ll be used to to allocate a new &lt;code class=&quot;highlighter-rouge&quot;&gt;incomingBuffer&lt;/code&gt; with that amount
+of free space.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;
+  &lt;div class=&quot;snippet-header&quot;&gt;
+    &lt;div class=&quot;snippet-name&quot;&gt;&lt;span&gt;zookeeper-server/.../org/apache/zookeeper/ClientCnxnSocketNIO.java&lt;/span&gt;&lt;/div&gt;
+    &lt;div class=&quot;snippet-actions&quot;&gt;
+      &lt;button class=&quot;snippet-action-copy&quot; data-snippet=&quot;dm9pZCBkb0lPKFF1ZXVlPFBhY2tldD4gcGVuZGluZ1F1ZXVlLCBDbGllbnRD
+bnhuIGNueG4pIHRocm93cyBJbnRlcnJ1cHRlZEV4Y2VwdGlvbiwgSU9FeGNl
+cHRpb24gewogICAgLi4uCiAgICBpZiAoc29ja0tleS5pc1JlYWRhYmxlKCkp
+IHsKICAgICAgICBpbnQgcmMgPSBzb2NrLnJlYWQoaW5jb21pbmdCdWZmZXIp
+OwogICAgICAgIGlmIChyYyA8IDApIHsKICAgICAgICAgICAgdGhyb3cgbmV3
+IEVuZE9mU3RyZWFtRXhjZXB0aW9uKCJVbmFibGUgdG8gcmVhZCBhZGRpdGlv
+bmFsIGRhdGEgZnJvbSBzZXJ2ZXIgc2Vzc2lvbmlkIDB4IgogICAgICAgICAg
+ICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgKyBMb25nLnRvSGV4
+U3RyaW5nKHNlc3Npb25JZCkKICAgICAgICAgICAgICAgICAgICAgICAgICAg
+ICAgICAgICAgICAgICAgICsgIiwgbGlrZWx5IHNlcnZlciBoYXMgY2xvc2Vk
+IHNvY2tldCIpOwogICAgICAgIH0KICAgICAgICBpZiAoIWluY29taW5nQnVm
+ZmVyLmhhc1JlbWFpbmluZygpKSB7CiAgICAgICAgICAgIGluY29taW5nQnVm
+ZmVyLmZsaXAoKTsKICAgICAgICAgICAgaWYgKGluY29taW5nQnVmZmVyID09
+IGxlbkJ1ZmZlcikgewogICAgICAgICAgICAgICAgcmVjdkNvdW50LmdldEFu
+ZEluY3JlbWVudCgpOwogICAgICAgICAgICAgICAgcmVhZExlbmd0aCgpOwog
+ICAgICAgICAgICB9IGVsc2UgaWYgKCFpbml0aWFsaXplZCkgewogICAgICAg
+ICAgICAgICAgcmVhZENvbm5lY3RSZXN1bHQoKTsKICAgICAgICAgICAgICAg
+IGVuYWJsZVJlYWQoKTsKICAgICAgICAgICAgICAgIGlmIChmaW5kU2VuZGFi
+bGVQYWNrZXQob3V0Z29pbmdRdWV1ZSwgc2VuZFRocmVhZC50dW5uZWxBdXRo
+SW5Qcm9ncmVzcygpKSAhPSBudWxsKSB7CiAgICAgICAgICAgICAgICAgICAg
+Ly8gU2luY2UgU0FTTCBhdXRoZW50aWNhdGlvbiBoYXMgY29tcGxldGVkIChp
+ZiBjbGllbnQgaXMgY29uZmlndXJlZCB0byBkbyBzbyksCiAgICAgICAgICAg
+ICAgICAgICAgLy8gb3V0Z29pbmcgcGFja2V0cyB3YWl0aW5nIGluIHRoZSBv
+dXRnb2luZ1F1ZXVlIGNhbiBub3cgYmUgc2VudC4KICAgICAgICAgICAgICAg
+ICAgICBlbmFibGVXcml0ZSgpOwogICAgICAgICAgICAgICAgfQogICAgICAg
+ICAgICAgICAgbGVuQnVmZmVyLmNsZWFyKCk7CiAgICAgICAgICAgICAgICBp
+bmNvbWluZ0J1ZmZlciA9IGxlbkJ1ZmZlcjsKICAgICAgICAgICAgICAgIHVw
+ZGF0ZUxhc3RIZWFyZCgpOwogICAgICAgICAgICAgICAgaW5pdGlhbGl6ZWQg
+PSB0cnVlOwogICAgICAgICAgICB9IGVsc2UgewogICAgICAgICAgICAgICAg
+c2VuZFRocmVhZC5yZWFkUmVzcG9uc2UoaW5jb21pbmdCdWZmZXIpOwogICAg
+ICAgICAgICAgICAgbGVuQnVmZmVyLmNsZWFyKCk7CiAgICAgICAgICAgICAg
+ICBpbmNvbWluZ0J1ZmZlciA9IGxlbkJ1ZmZlcjsKICAgICAgICAgICAgICAg
+IHVwZGF0ZUxhc3RIZWFyZCgpOwogICAgICAgICAgICB9CiAgICAgICAgfQog
+ICAgfQogICAgLi4uCn0=
+&quot;&gt;&lt;/button&gt;
+    &lt;/div&gt;
+  &lt;/div&gt;
+  &lt;pre&gt;&lt;code class=&quot;language-java&quot; data-lang=&quot;java&quot;&gt;&lt;table class=&quot;rouge-table&quot;&gt;&lt;tbody&gt;&lt;tr&gt;&lt;td class=&quot;gutter gl&quot;&gt;&lt;pre class=&quot;lineno&quot;&gt;66
+67
+68
+69
+70
+71
+72
+73
+74
+75
+76
+77
+78
+79
+80
+81
+82
+83
+84
+85
+86
+87
+88
+89
+90
+91
+92
+93
+94
+95
+96
+97
+98
+99
+100
+101
+&lt;/pre&gt;&lt;/td&gt;&lt;td class=&quot;code&quot;&gt;&lt;pre&gt;&lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;doIO&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;Queue&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;Packet&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;pendingQueue&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;ClientCnxn&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;cnxn&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;kd&quot;&gt;throws&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;InterruptedException&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;IOException&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;...&lt;/span&gt;
+    &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;sockKey&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;isReadable&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;())&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+        &lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;rc&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;sock&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;read&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;incomingBuffer&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;);&lt;/span&gt;
+        &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;rc&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+            &lt;span class=&quot;k&quot;&gt;throw&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;new&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;EndOfStreamException&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;Unable to read additional data from server sessionid 0x&quot;&lt;/span&gt;
+                                           &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;Long&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;toHexString&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;sessionId&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt;
+                                           &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;&quot;, likely server has closed socket&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;);&lt;/span&gt;
+        &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+        &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;(!&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;incomingBuffer&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;hasRemaining&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;())&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+            &lt;span class=&quot;n&quot;&gt;incomingBuffer&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;flip&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;();&lt;/span&gt;
+            &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;incomingBuffer&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;==&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;lenBuffer&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+                &lt;span class=&quot;n&quot;&gt;recvCount&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;getAndIncrement&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;();&lt;/span&gt;
+                &lt;span class=&quot;n&quot;&gt;readLength&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;();&lt;/span&gt;
+            &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;else&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;(!&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;initialized&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+                &lt;span class=&quot;n&quot;&gt;readConnectResult&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;();&lt;/span&gt;
+                &lt;span class=&quot;n&quot;&gt;enableRead&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;();&lt;/span&gt;
+                &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;findSendablePacket&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;outgoingQueue&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;sendThread&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;tunnelAuthInProgress&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;())&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;!=&lt;/span&gt; &lt;span class=&quot;kc&quot;&gt;null&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+                    &lt;span class=&quot;c1&quot;&gt;// Since SASL authentication has completed (if client is configured to do so),&lt;/span&gt;
+                    &lt;span class=&quot;c1&quot;&gt;// outgoing packets waiting in the outgoingQueue can now be sent.&lt;/span&gt;
+                    &lt;span class=&quot;n&quot;&gt;enableWrite&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;();&lt;/span&gt;
+                &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+                &lt;span class=&quot;n&quot;&gt;lenBuffer&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;clear&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;();&lt;/span&gt;
+                &lt;span class=&quot;n&quot;&gt;incomingBuffer&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;lenBuffer&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;;&lt;/span&gt;
+                &lt;span class=&quot;n&quot;&gt;updateLastHeard&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;();&lt;/span&gt;
+                &lt;span class=&quot;n&quot;&gt;initialized&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;kc&quot;&gt;true&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;;&lt;/span&gt;
+            &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;else&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+                &lt;span class=&quot;n&quot;&gt;sendThread&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;readResponse&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;incomingBuffer&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;);&lt;/span&gt;
+                &lt;span class=&quot;n&quot;&gt;lenBuffer&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;clear&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;();&lt;/span&gt;
+                &lt;span class=&quot;n&quot;&gt;incomingBuffer&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;lenBuffer&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;;&lt;/span&gt;
+                &lt;span class=&quot;n&quot;&gt;updateLastHeard&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;();&lt;/span&gt;
+            &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+        &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;...&lt;/span&gt;
+&lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+&lt;/pre&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/tbody&gt;&lt;/table&gt;&lt;/code&gt;&lt;/pre&gt;
+&lt;/figure&gt;</content><author><name></name></author><summary type="html">This post aims to covering how ZooKeeper client library works internally. The version of ZooKeeper used is 3.6.1.</summary></entry><entry><title type="html">Redis RDB internals</title><link href="https://uzxmx.github.io/redis-rdb-internals.html" rel="alternate" type="text/html" title="Redis RDB internals" /><published>2020-06-13T02:11:00+00:00</published><updated>2020-06-13T02:11:00+00:00</updated><id>https://uzxmx.github.io/redis-rdb-internals</id><content type="html" xml:base="https://uzxmx.github.io/redis-rdb-internals.html">&lt;p&gt;This post aims to covering how Redis dumps in-memory data into a disk file.  The
 version of Redis used is 6.0.5.&lt;/p&gt;
 
 &lt;p&gt;First, let’s look at how Redis prepares for the dump. In &lt;code class=&quot;highlighter-rouge&quot;&gt;main&lt;/code&gt; function, Redis

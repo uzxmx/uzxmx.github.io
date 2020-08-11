@@ -1,0 +1,610 @@
+<!doctype html>
+<!--
+  Minimal Mistakes Jekyll Theme 4.19.1 by Michael Rose
+  Copyright 2013-2019 Michael Rose - mademistakes.com | @mmistakes
+  Free for personal and commercial use under the MIT license
+  https://github.com/mmistakes/minimal-mistakes/blob/master/LICENSE
+-->
+<html lang="en" class="no-js">
+  <head>
+    <meta charset="utf-8">
+
+<!-- begin _includes/seo.html --><title>ZooKeeper client library internals - Mingxiang’s blog</title>
+<meta name="description" content="This post aims to covering how ZooKeeper client library works internally. The version of ZooKeeper used is 3.6.1.  ">
+
+
+
+<meta property="og:type" content="article">
+<meta property="og:locale" content="en_US">
+<meta property="og:site_name" content="Mingxiang's blog">
+<meta property="og:title" content="ZooKeeper client library internals">
+<meta property="og:url" content="https://uzxmx.github.io/zookeeper-client-library-internals.html">
+
+
+  <meta property="og:description" content="This post aims to covering how ZooKeeper client library works internally. The version of ZooKeeper used is 3.6.1.  ">
+
+
+
+
+
+
+
+  <meta property="article:published_time" content="2020-06-14T12:05:00+00:00">
+
+
+
+
+
+
+<link rel="canonical" href="https://uzxmx.github.io/zookeeper-client-library-internals.html">
+
+
+
+
+<script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    
+      "@type": "Person",
+      "name": null,
+      "url": "https://uzxmx.github.io/"
+    
+  }
+</script>
+
+
+  <meta name="google-site-verification" content="4cV_DkFkOihbmPCkF3LqIVBC3lM0yA0UhentAgp7Mmg" />
+
+
+  <meta name="msvalidate.01" content="E2FD20A4199C5CDBE9E4842CCD5820E0">
+
+
+
+
+<!-- end _includes/seo.html -->
+
+
+<link href="/feed.xml" type="application/atom+xml" rel="alternate" title="Mingxiang's blog Feed">
+
+<!-- https://t.co/dKP3o1e -->
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<script>
+  document.documentElement.className = document.documentElement.className.replace(/\bno-js\b/g, '') + ' js ';
+</script>
+
+<!-- For all browsers -->
+<link rel="stylesheet" href="/assets/css/main.css">
+
+<!--[if IE]>
+  <style>
+    /* old IE unsupported flexbox fixes */
+    .greedy-nav .site-title {
+      padding-right: 3em;
+    }
+    .greedy-nav button {
+      position: absolute;
+      top: 0;
+      right: 0;
+      height: 100%;
+    }
+  </style>
+<![endif]-->
+
+
+
+    <link href="/assets/styles/snippet.css" rel="stylesheet" type="text/css">
+
+  </head>
+
+  <body class="layout--single">
+    <nav class="skip-links">
+  <h2 class="screen-reader-text">Skip links</h2>
+  <ul>
+    <li><a href="#site-nav" class="screen-reader-shortcut">Skip to primary navigation</a></li>
+    <li><a href="#main" class="screen-reader-shortcut">Skip to content</a></li>
+    <li><a href="#footer" class="screen-reader-shortcut">Skip to footer</a></li>
+  </ul>
+</nav>
+
+    <!--[if lt IE 9]>
+<div class="notice--danger align-center" style="margin: 0;">You are using an <strong>outdated</strong> browser. Please <a href="https://browsehappy.com/">upgrade your browser</a> to improve your experience.</div>
+<![endif]-->
+
+    
+
+<div class="masthead">
+  <div class="masthead__inner-wrap">
+    <div class="masthead__menu">
+      <nav id="site-nav" class="greedy-nav">
+        
+        <a class="site-title" href="/">
+          Mingxiang's blog
+          
+        </a>
+        <ul class="visible-links"></ul>
+        
+        <button class="greedy-nav__toggle hidden" type="button">
+          <span class="visually-hidden">Toggle menu</span>
+          <div class="navicon"></div>
+        </button>
+        <ul class="hidden-links hidden"></ul>
+      </nav>
+    </div>
+  </div>
+</div>
+
+
+    <div class="initial-content">
+      
+
+
+
+<div id="main" role="main">
+  
+
+
+  <article class="page" itemscope itemtype="https://schema.org/CreativeWork">
+    <meta itemprop="headline" content="ZooKeeper client library internals">
+    <meta itemprop="description" content="This post aims to covering how ZooKeeper client library works internally. Theversion of ZooKeeper used is 3.6.1.">
+    <meta itemprop="datePublished" content="2020-06-14T12:05:00+00:00">
+    
+
+    <div class="page__inner-wrap">
+      
+        <header>
+          <h1 id="page-title" class="page__title" itemprop="headline">ZooKeeper client library internals
+</h1>
+          
+            <p class="page__meta"><i class="far fa-clock" aria-hidden="true"></i> 
+
+
+
+
+  3 minute read
+
+</p>
+          
+        </header>
+      
+
+      <section class="page__content" itemprop="text">
+        
+          <aside class="sidebar__right sticky">
+            <nav class="toc">
+              <header><h4 class="nav__title"><i class="fas fa-file-alt"></i> On this page</h4></header>
+              <ul class="toc__menu">
+  <li><a href="#the-topmost-class">The topmost class</a>
+    <ul>
+      <li><a href="#session-establishment">Session establishment</a></li>
+      <li><a href="#syncasync-requests">Sync/Async requests</a></li>
+    </ul>
+  </li>
+  <li><a href="#the-core-of-io-handling">The core of IO handling</a>
+    <ul>
+      <li><a href="#packets-queue">Packets queue</a></li>
+      <li><a href="#senderthread">SenderThread</a>
+        <ul>
+          <li><a href="#lower-level-socket-implementations">Lower level socket implementations</a></li>
+        </ul>
+      </li>
+    </ul>
+  </li>
+</ul>
+
+            </nav>
+          </aside>
+        
+        <p>This post aims to covering how ZooKeeper client library works internally. The
+version of ZooKeeper used is 3.6.1.</p>
+
+<h2 id="the-topmost-class">The topmost class</h2>
+
+<p><a href="https://zookeeper.apache.org/doc/r3.6.1/apidocs/zookeeper-server/org/apache/zookeeper/ZooKeeper.html">ZooKeeper</a> is the public interface that a client can use to interact
+with a ZooKeeper server (sending requests and getting responses). The most
+notable features are as follows:</p>
+
+<ul>
+  <li>Session establishment is asynchronous</li>
+  <li><a href="https://github.com/apache/zookeeper/blob/104dcb3e3fb464b30c5186d229e00af9f332524b/zookeeper-server/src/main/java/org/apache/zookeeper/ZooKeeper.java#L914">Read-only
+mode</a> (useful in case of partitioning)</li>
+  <li>Sync/Async requests</li>
+</ul>
+
+<h3 id="session-establishment">Session establishment</h3>
+
+<p>When instantiating a <a href="https://zookeeper.apache.org/doc/r3.6.1/apidocs/zookeeper-server/org/apache/zookeeper/ZooKeeper.html">ZooKeeper</a>, it creates a
+<a href="https://zookeeper.apache.org/doc/r3.6.1/apidocs/zookeeper-server/org/apache/zookeeper/ClientCnxn.html">ClientCnxn</a> object, starts a sender thread and an event thread
+(these two threads will be described in the following section) and then returns
+immediately. So the session may or may not have been established at that moment.</p>
+
+<h3 id="syncasync-requests">Sync/Async requests</h3>
+
+<p><a href="https://zookeeper.apache.org/doc/r3.6.1/apidocs/zookeeper-server/org/apache/zookeeper/ZooKeeper.html">ZooKeeper</a> provides both synchronous and asynchronous methods to
+send requests. The synchronous methods are implemented on top of the
+asynchronous mechanism. They are backed by below <code class="highlighter-rouge">submitRequest</code> method. In this
+method, after adding a new packet to the queue, the calling thread waits on the
+packet for its finishing.</p>
+
+<figure class="highlight">
+  <div class="snippet-header">
+    <div class="snippet-name"><span>zookeeper-server/.../org/apache/zookeeper/ClientCnxn.java</span></div>
+    <div class="snippet-actions">
+      <button class="snippet-action-copy" data-snippet="cHVibGljIFJlcGx5SGVhZGVyIHN1Ym1pdFJlcXVlc3QoCiAgICBSZXF1ZXN0
+SGVhZGVyIGgsCiAgICBSZWNvcmQgcmVxdWVzdCwKICAgIFJlY29yZCByZXNw
+b25zZSwKICAgIFdhdGNoUmVnaXN0cmF0aW9uIHdhdGNoUmVnaXN0cmF0aW9u
+LAogICAgV2F0Y2hEZXJlZ2lzdHJhdGlvbiB3YXRjaERlcmVnaXN0cmF0aW9u
+KSB0aHJvd3MgSW50ZXJydXB0ZWRFeGNlcHRpb24gewogICAgUmVwbHlIZWFk
+ZXIgciA9IG5ldyBSZXBseUhlYWRlcigpOwogICAgUGFja2V0IHBhY2tldCA9
+IHF1ZXVlUGFja2V0KAogICAgICAgIGgsCiAgICAgICAgciwKICAgICAgICBy
+ZXF1ZXN0LAogICAgICAgIHJlc3BvbnNlLAogICAgICAgIG51bGwsCiAgICAg
+ICAgbnVsbCwKICAgICAgICBudWxsLAogICAgICAgIG51bGwsCiAgICAgICAg
+d2F0Y2hSZWdpc3RyYXRpb24sCiAgICAgICAgd2F0Y2hEZXJlZ2lzdHJhdGlv
+bik7CiAgICBzeW5jaHJvbml6ZWQgKHBhY2tldCkgewogICAgICAgIGlmIChy
+ZXF1ZXN0VGltZW91dCA+IDApIHsKICAgICAgICAgICAgLy8gV2FpdCBmb3Ig
+cmVxdWVzdCBjb21wbGV0aW9uIHdpdGggdGltZW91dAogICAgICAgICAgICB3
+YWl0Rm9yUGFja2V0RmluaXNoKHIsIHBhY2tldCk7CiAgICAgICAgfSBlbHNl
+IHsKICAgICAgICAgICAgLy8gV2FpdCBmb3IgcmVxdWVzdCBjb21wbGV0aW9u
+IGluZmluaXRlbHkKICAgICAgICAgICAgd2hpbGUgKCFwYWNrZXQuZmluaXNo
+ZWQpIHsKICAgICAgICAgICAgICAgIHBhY2tldC53YWl0KCk7CiAgICAgICAg
+ICAgIH0KICAgICAgICB9CiAgICB9CiAgICBpZiAoci5nZXRFcnIoKSA9PSBD
+b2RlLlJFUVVFU1RUSU1FT1VULmludFZhbHVlKCkpIHsKICAgICAgICBzZW5k
+VGhyZWFkLmNsZWFuQW5kTm90aWZ5U3RhdGUoKTsKICAgIH0KICAgIHJldHVy
+biByOwp9
+"></button>
+    </div>
+  </div>
+  <pre><code class="language-java" data-lang="java"><table class="rouge-table"><tbody><tr><td class="gutter gl"><pre class="lineno">1536
+1537
+1538
+1539
+1540
+1541
+1542
+1543
+1544
+1545
+1546
+1547
+1548
+1549
+1550
+1551
+1552
+1553
+1554
+1555
+1556
+1557
+1558
+1559
+1560
+1561
+1562
+1563
+1564
+1565
+1566
+1567
+1568
+1569
+</pre></td><td class="code"><pre><span class="kd">public</span> <span class="nc">ReplyHeader</span> <span class="nf">submitRequest</span><span class="o">(</span>
+    <span class="nc">RequestHeader</span> <span class="n">h</span><span class="o">,</span>
+    <span class="nc">Record</span> <span class="n">request</span><span class="o">,</span>
+    <span class="nc">Record</span> <span class="n">response</span><span class="o">,</span>
+    <span class="nc">WatchRegistration</span> <span class="n">watchRegistration</span><span class="o">,</span>
+    <span class="nc">WatchDeregistration</span> <span class="n">watchDeregistration</span><span class="o">)</span> <span class="kd">throws</span> <span class="nc">InterruptedException</span> <span class="o">{</span>
+    <span class="nc">ReplyHeader</span> <span class="n">r</span> <span class="o">=</span> <span class="k">new</span> <span class="nc">ReplyHeader</span><span class="o">();</span>
+    <span class="nc">Packet</span> <span class="n">packet</span> <span class="o">=</span> <span class="n">queuePacket</span><span class="o">(</span>
+        <span class="n">h</span><span class="o">,</span>
+        <span class="n">r</span><span class="o">,</span>
+        <span class="n">request</span><span class="o">,</span>
+        <span class="n">response</span><span class="o">,</span>
+        <span class="kc">null</span><span class="o">,</span>
+        <span class="kc">null</span><span class="o">,</span>
+        <span class="kc">null</span><span class="o">,</span>
+        <span class="kc">null</span><span class="o">,</span>
+        <span class="n">watchRegistration</span><span class="o">,</span>
+        <span class="n">watchDeregistration</span><span class="o">);</span>
+    <span class="kd">synchronized</span> <span class="o">(</span><span class="n">packet</span><span class="o">)</span> <span class="o">{</span>
+        <span class="k">if</span> <span class="o">(</span><span class="n">requestTimeout</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="o">)</span> <span class="o">{</span>
+            <span class="c1">// Wait for request completion with timeout</span>
+            <span class="n">waitForPacketFinish</span><span class="o">(</span><span class="n">r</span><span class="o">,</span> <span class="n">packet</span><span class="o">);</span>
+        <span class="o">}</span> <span class="k">else</span> <span class="o">{</span>
+            <span class="c1">// Wait for request completion infinitely</span>
+            <span class="k">while</span> <span class="o">(!</span><span class="n">packet</span><span class="o">.</span><span class="na">finished</span><span class="o">)</span> <span class="o">{</span>
+                <span class="n">packet</span><span class="o">.</span><span class="na">wait</span><span class="o">();</span>
+            <span class="o">}</span>
+        <span class="o">}</span>
+    <span class="o">}</span>
+    <span class="k">if</span> <span class="o">(</span><span class="n">r</span><span class="o">.</span><span class="na">getErr</span><span class="o">()</span> <span class="o">==</span> <span class="nc">Code</span><span class="o">.</span><span class="na">REQUESTTIMEOUT</span><span class="o">.</span><span class="na">intValue</span><span class="o">())</span> <span class="o">{</span>
+        <span class="n">sendThread</span><span class="o">.</span><span class="na">cleanAndNotifyState</span><span class="o">();</span>
+    <span class="o">}</span>
+    <span class="k">return</span> <span class="n">r</span><span class="o">;</span>
+<span class="o">}</span>
+</pre></td></tr></tbody></table></code></pre>
+</figure>
+
+<p>When using the asynchronous methods, a callback must be passed as an argument.
+All the supported types of callbacks are defined in
+<a href="https://zookeeper.apache.org/doc/r3.6.1/apidocs/zookeeper-server/org/apache/zookeeper/AsyncCallback.html">AsyncCallback</a>.  Because the callback is executed in ZooKeeper
+IO thread, we shouldn’t perform expensive operations in the callback, otherwise,
+the ZooKeeper client won’t process other events in time.</p>
+
+<h2 id="the-core-of-io-handling">The core of IO handling</h2>
+
+<p>The class <a href="https://zookeeper.apache.org/doc/r3.6.1/apidocs/zookeeper-server/org/apache/zookeeper/ClientCnxn.html">ClientCnxn</a> is the core of client IO handling. All
+operations on <a href="https://zookeeper.apache.org/doc/r3.6.1/apidocs/zookeeper-server/org/apache/zookeeper/ZooKeeper.html">ZooKeeper</a> are finally performed by it.  Two threads
+are created and managed inside <code class="highlighter-rouge">ClientCnxn</code>, one is <code class="highlighter-rouge">SenderThread</code>, the other is
+<code class="highlighter-rouge">EventThread</code>.</p>
+
+<h3 id="packets-queue">Packets queue</h3>
+
+<p>Internally there are two queues for packets. One is
+<a href="https://github.com/apache/zookeeper/blob/release-3.6.1/zookeeper-server/src/main/java/org/apache/zookeeper/ClientCnxn.java#L152"><code class="highlighter-rouge">outgoingQueue</code></a>
+which stores packets ready to be sent. The other is
+<a href="https://github.com/apache/zookeeper/blob/release-3.6.1/zookeeper-server/src/main/java/org/apache/zookeeper/ClientCnxn.java#L147"><code class="highlighter-rouge">pendingQueue</code></a>
+which stores packets that have have been sent and are waiting for a response.</p>
+
+<h3 id="senderthread">SenderThread</h3>
+
+<p>The <a href="https://github.com/apache/zookeeper/blob/104dcb3e3fb464b30c5186d229e00af9f332524b/zookeeper-server/src/main/java/org/apache/zookeeper/ClientCnxn.java#L857"><code class="highlighter-rouge">SenderThread</code></a> repeatedly does the following:</p>
+
+<ul>
+  <li>Connect to a ZooKeeper server unless connected</li>
+  <li>Authenticate to the server if connected and required</li>
+  <li>Send heart beats if connected</li>
+  <li>Call the lower level socket implementation to proceed (poll and process IO
+events)</li>
+</ul>
+
+<h4 id="lower-level-socket-implementations">Lower level socket implementations</h4>
+
+<p>The <code class="highlighter-rouge">SenderThread</code> owns a <code class="highlighter-rouge">ClientCnxnSocket</code> which abstracts out the lower level
+socket implementation. Two implementations are provided: <code class="highlighter-rouge">ClientCnxnSocketNIO</code>
+and <code class="highlighter-rouge">ClientCnxnSocketNetty</code>.</p>
+
+<p>Let’s take <code class="highlighter-rouge">ClientCnxnSocketNIO</code> for an example. The main logic is <code class="highlighter-rouge">doIO</code>
+method. Inside <code class="highlighter-rouge">doIO</code>, when <code class="highlighter-rouge">SocketChannel</code> is readable, available data will be
+read into <code class="highlighter-rouge">incomingBuffer</code> which is a preallocated <code class="highlighter-rouge">ByteBuffer</code> (with fixed
+buffer size). When <code class="highlighter-rouge">incomingBuffer</code> is full, if it is <code class="highlighter-rouge">lenBuffer</code> (which is also
+a <code class="highlighter-rouge">ByteBuffer</code> but only accepts 4-bytes data which is the length of the incoming
+message), it’ll be used to to allocate a new <code class="highlighter-rouge">incomingBuffer</code> with that amount
+of free space.</p>
+
+<figure class="highlight">
+  <div class="snippet-header">
+    <div class="snippet-name"><span>zookeeper-server/.../org/apache/zookeeper/ClientCnxnSocketNIO.java</span></div>
+    <div class="snippet-actions">
+      <button class="snippet-action-copy" data-snippet="dm9pZCBkb0lPKFF1ZXVlPFBhY2tldD4gcGVuZGluZ1F1ZXVlLCBDbGllbnRD
+bnhuIGNueG4pIHRocm93cyBJbnRlcnJ1cHRlZEV4Y2VwdGlvbiwgSU9FeGNl
+cHRpb24gewogICAgLi4uCiAgICBpZiAoc29ja0tleS5pc1JlYWRhYmxlKCkp
+IHsKICAgICAgICBpbnQgcmMgPSBzb2NrLnJlYWQoaW5jb21pbmdCdWZmZXIp
+OwogICAgICAgIGlmIChyYyA8IDApIHsKICAgICAgICAgICAgdGhyb3cgbmV3
+IEVuZE9mU3RyZWFtRXhjZXB0aW9uKCJVbmFibGUgdG8gcmVhZCBhZGRpdGlv
+bmFsIGRhdGEgZnJvbSBzZXJ2ZXIgc2Vzc2lvbmlkIDB4IgogICAgICAgICAg
+ICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgKyBMb25nLnRvSGV4
+U3RyaW5nKHNlc3Npb25JZCkKICAgICAgICAgICAgICAgICAgICAgICAgICAg
+ICAgICAgICAgICAgICAgICsgIiwgbGlrZWx5IHNlcnZlciBoYXMgY2xvc2Vk
+IHNvY2tldCIpOwogICAgICAgIH0KICAgICAgICBpZiAoIWluY29taW5nQnVm
+ZmVyLmhhc1JlbWFpbmluZygpKSB7CiAgICAgICAgICAgIGluY29taW5nQnVm
+ZmVyLmZsaXAoKTsKICAgICAgICAgICAgaWYgKGluY29taW5nQnVmZmVyID09
+IGxlbkJ1ZmZlcikgewogICAgICAgICAgICAgICAgcmVjdkNvdW50LmdldEFu
+ZEluY3JlbWVudCgpOwogICAgICAgICAgICAgICAgcmVhZExlbmd0aCgpOwog
+ICAgICAgICAgICB9IGVsc2UgaWYgKCFpbml0aWFsaXplZCkgewogICAgICAg
+ICAgICAgICAgcmVhZENvbm5lY3RSZXN1bHQoKTsKICAgICAgICAgICAgICAg
+IGVuYWJsZVJlYWQoKTsKICAgICAgICAgICAgICAgIGlmIChmaW5kU2VuZGFi
+bGVQYWNrZXQob3V0Z29pbmdRdWV1ZSwgc2VuZFRocmVhZC50dW5uZWxBdXRo
+SW5Qcm9ncmVzcygpKSAhPSBudWxsKSB7CiAgICAgICAgICAgICAgICAgICAg
+Ly8gU2luY2UgU0FTTCBhdXRoZW50aWNhdGlvbiBoYXMgY29tcGxldGVkIChp
+ZiBjbGllbnQgaXMgY29uZmlndXJlZCB0byBkbyBzbyksCiAgICAgICAgICAg
+ICAgICAgICAgLy8gb3V0Z29pbmcgcGFja2V0cyB3YWl0aW5nIGluIHRoZSBv
+dXRnb2luZ1F1ZXVlIGNhbiBub3cgYmUgc2VudC4KICAgICAgICAgICAgICAg
+ICAgICBlbmFibGVXcml0ZSgpOwogICAgICAgICAgICAgICAgfQogICAgICAg
+ICAgICAgICAgbGVuQnVmZmVyLmNsZWFyKCk7CiAgICAgICAgICAgICAgICBp
+bmNvbWluZ0J1ZmZlciA9IGxlbkJ1ZmZlcjsKICAgICAgICAgICAgICAgIHVw
+ZGF0ZUxhc3RIZWFyZCgpOwogICAgICAgICAgICAgICAgaW5pdGlhbGl6ZWQg
+PSB0cnVlOwogICAgICAgICAgICB9IGVsc2UgewogICAgICAgICAgICAgICAg
+c2VuZFRocmVhZC5yZWFkUmVzcG9uc2UoaW5jb21pbmdCdWZmZXIpOwogICAg
+ICAgICAgICAgICAgbGVuQnVmZmVyLmNsZWFyKCk7CiAgICAgICAgICAgICAg
+ICBpbmNvbWluZ0J1ZmZlciA9IGxlbkJ1ZmZlcjsKICAgICAgICAgICAgICAg
+IHVwZGF0ZUxhc3RIZWFyZCgpOwogICAgICAgICAgICB9CiAgICAgICAgfQog
+ICAgfQogICAgLi4uCn0=
+"></button>
+    </div>
+  </div>
+  <pre><code class="language-java" data-lang="java"><table class="rouge-table"><tbody><tr><td class="gutter gl"><pre class="lineno">66
+67
+68
+69
+70
+71
+72
+73
+74
+75
+76
+77
+78
+79
+80
+81
+82
+83
+84
+85
+86
+87
+88
+89
+90
+91
+92
+93
+94
+95
+96
+97
+98
+99
+100
+101
+</pre></td><td class="code"><pre><span class="kt">void</span> <span class="nf">doIO</span><span class="o">(</span><span class="nc">Queue</span><span class="o">&lt;</span><span class="nc">Packet</span><span class="o">&gt;</span> <span class="n">pendingQueue</span><span class="o">,</span> <span class="nc">ClientCnxn</span> <span class="n">cnxn</span><span class="o">)</span> <span class="kd">throws</span> <span class="nc">InterruptedException</span><span class="o">,</span> <span class="nc">IOException</span> <span class="o">{</span>
+    <span class="o">...</span>
+    <span class="k">if</span> <span class="o">(</span><span class="n">sockKey</span><span class="o">.</span><span class="na">isReadable</span><span class="o">())</span> <span class="o">{</span>
+        <span class="kt">int</span> <span class="n">rc</span> <span class="o">=</span> <span class="n">sock</span><span class="o">.</span><span class="na">read</span><span class="o">(</span><span class="n">incomingBuffer</span><span class="o">);</span>
+        <span class="k">if</span> <span class="o">(</span><span class="n">rc</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="o">)</span> <span class="o">{</span>
+            <span class="k">throw</span> <span class="k">new</span> <span class="nf">EndOfStreamException</span><span class="o">(</span><span class="s">"Unable to read additional data from server sessionid 0x"</span>
+                                           <span class="o">+</span> <span class="nc">Long</span><span class="o">.</span><span class="na">toHexString</span><span class="o">(</span><span class="n">sessionId</span><span class="o">)</span>
+                                           <span class="o">+</span> <span class="s">", likely server has closed socket"</span><span class="o">);</span>
+        <span class="o">}</span>
+        <span class="k">if</span> <span class="o">(!</span><span class="n">incomingBuffer</span><span class="o">.</span><span class="na">hasRemaining</span><span class="o">())</span> <span class="o">{</span>
+            <span class="n">incomingBuffer</span><span class="o">.</span><span class="na">flip</span><span class="o">();</span>
+            <span class="k">if</span> <span class="o">(</span><span class="n">incomingBuffer</span> <span class="o">==</span> <span class="n">lenBuffer</span><span class="o">)</span> <span class="o">{</span>
+                <span class="n">recvCount</span><span class="o">.</span><span class="na">getAndIncrement</span><span class="o">();</span>
+                <span class="n">readLength</span><span class="o">();</span>
+            <span class="o">}</span> <span class="k">else</span> <span class="k">if</span> <span class="o">(!</span><span class="n">initialized</span><span class="o">)</span> <span class="o">{</span>
+                <span class="n">readConnectResult</span><span class="o">();</span>
+                <span class="n">enableRead</span><span class="o">();</span>
+                <span class="k">if</span> <span class="o">(</span><span class="n">findSendablePacket</span><span class="o">(</span><span class="n">outgoingQueue</span><span class="o">,</span> <span class="n">sendThread</span><span class="o">.</span><span class="na">tunnelAuthInProgress</span><span class="o">())</span> <span class="o">!=</span> <span class="kc">null</span><span class="o">)</span> <span class="o">{</span>
+                    <span class="c1">// Since SASL authentication has completed (if client is configured to do so),</span>
+                    <span class="c1">// outgoing packets waiting in the outgoingQueue can now be sent.</span>
+                    <span class="n">enableWrite</span><span class="o">();</span>
+                <span class="o">}</span>
+                <span class="n">lenBuffer</span><span class="o">.</span><span class="na">clear</span><span class="o">();</span>
+                <span class="n">incomingBuffer</span> <span class="o">=</span> <span class="n">lenBuffer</span><span class="o">;</span>
+                <span class="n">updateLastHeard</span><span class="o">();</span>
+                <span class="n">initialized</span> <span class="o">=</span> <span class="kc">true</span><span class="o">;</span>
+            <span class="o">}</span> <span class="k">else</span> <span class="o">{</span>
+                <span class="n">sendThread</span><span class="o">.</span><span class="na">readResponse</span><span class="o">(</span><span class="n">incomingBuffer</span><span class="o">);</span>
+                <span class="n">lenBuffer</span><span class="o">.</span><span class="na">clear</span><span class="o">();</span>
+                <span class="n">incomingBuffer</span> <span class="o">=</span> <span class="n">lenBuffer</span><span class="o">;</span>
+                <span class="n">updateLastHeard</span><span class="o">();</span>
+            <span class="o">}</span>
+        <span class="o">}</span>
+    <span class="o">}</span>
+    <span class="o">...</span>
+<span class="o">}</span>
+</pre></td></tr></tbody></table></code></pre>
+</figure>
+
+
+        
+      </section>
+
+      <footer class="page__meta">
+        
+        
+
+
+        
+          <p class="page__date"><strong><i class="fas fa-fw fa-calendar-alt" aria-hidden="true"></i> Updated:</strong> <time datetime="2020-06-14T12:05:00+00:00">June 14, 2020</time></p>
+        
+      </footer>
+
+      
+
+      
+  <nav class="pagination">
+    
+      <a href="/redis-rdb-internals.html" class="pagination--pager" title="Redis RDB internals
+">Previous</a>
+    
+    
+      <a href="#" class="pagination--pager disabled">Next</a>
+    
+  </nav>
+
+    </div>
+
+    
+      <div class="page__comments">
+  
+  
+      <section id="custom-comments"></section>
+  
+</div>
+
+    
+  </article>
+
+  
+  
+</div>
+
+    </div>
+
+    
+
+    <div id="footer" class="page__footer">
+      <footer>
+        <!-- start custom footer snippets -->
+
+<!-- end custom footer snippets -->
+        <div class="page__footer-follow">
+  <ul class="social-icons">
+    
+
+    
+
+    <li><a href="/feed.xml"><i class="fas fa-fw fa-rss-square" aria-hidden="true"></i> Feed</a></li>
+  </ul>
+</div>
+
+<div class="page__footer-copyright">&copy; 2020 Mingxiang's blog. Powered by <a href="https://jekyllrb.com" rel="nofollow">Jekyll</a> &amp; <a href="https://mademistakes.com/work/minimal-mistakes-jekyll-theme/" rel="nofollow">Minimal Mistakes</a>.</div>
+
+      </footer>
+    </div>
+
+    
+  
+    <script src="/assets/scripts/snippet.js"></script>
+  
+
+
+
+
+
+
+
+  <!-- Global site tag (gtag.js) - Google Analytics -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=UA-164919405-1"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', 'UA-164919405-1', { 'anonymize_ip': false});
+</script>
+
+
+
+
+
+
+    
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/gitalk@1/dist/gitalk.css" />
+  <script src="https://cdn.jsdelivr.net/npm/gitalk@1/dist/gitalk.min.js"></script>
+  <script>
+    var gitalk = new Gitalk({
+      clientID: 'b520e04f320af9c44fa8',
+      clientSecret: '9c2486428baddfcf9703cdf1f7e6b42fc8f3e0b9',
+      repo: 'uzxmx.github.io',
+      owner: 'uzxmx',
+      admin: ['uzxmx'],
+      id: location.pathname
+    });
+
+    gitalk.render('custom-comments');
+  </script>
+  <noscript>Please enable JavaScript to view the comments powered by Gitalk.</noscript>
+
+
+
+
+
+
+
+
+  </body>
+</html>
